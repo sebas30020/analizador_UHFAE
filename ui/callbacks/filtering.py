@@ -17,9 +17,10 @@ def resolve_timeseries_selection_range(selected_data: dict | None) -> tuple[floa
     """Extrae el rango de X (minutos transcurridos) de una selección en la gráfica #1.
 
     La gráfica #1 se resuelve SIEMPRE por rango de tiempo, nunca por punto individual:
-    cada punto graficado de la envolvente puede ser un bin de diezmado que representa
-    miles de señales reales (``viz/decimation.py``), así que la selección por punto es
-    ambigua de por sí. Selección rectangular trae ``range.x``; lazo trae ``lassoPoints.x``
+    aunque desde la Fase 7 la envolvente se dibuja sin diezmar (1 segmento = 1 señal
+    real), cada señal aporta TRES entradas a la traza (min, max y el separador ``None``
+    de ``build_vertical_segments``), así que el índice de punto de Plotly tampoco es el
+    índice de señal. Selección rectangular trae ``range.x``; lazo trae ``lassoPoints.x``
     (los vértices del polígono, sin bounding-box precalculado) -- se usa su min/max.
     """
     if not selected_data:

@@ -5,6 +5,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from core.models import EventSeries
+from ui.components.event_lines import build_event_line_shapes
 from ui.components.time_axis import TIME_AXIS_TITLE, to_elapsed_minutes
 
 POINT_COLOR = "#4A7BB0"
@@ -45,9 +46,6 @@ def build_metric_figure(
             )
         )
 
-    for t_ev in to_elapsed_minutes(events.timestamps, t0):
-        fig.add_vline(x=float(t_ev), line=dict(color=EVENT_COLOR, dash="dash", width=1))
-
     y_title = f"{label} ({unit})" if unit else label
     xaxis_kwargs: dict[str, object] = dict(title=TIME_AXIS_TITLE)
     if x_range is not None:
@@ -56,6 +54,7 @@ def build_metric_figure(
         xaxis_kwargs["range"] = list(x_range)
 
     fig.update_layout(
+        shapes=build_event_line_shapes(events, t0, EVENT_COLOR),
         xaxis=xaxis_kwargs,
         yaxis=dict(title=y_title),
         margin=dict(l=60, r=20, t=30, b=40),

@@ -1,6 +1,6 @@
 import numpy as np
 
-from viz.decimation import bin_reduce_minmax, build_vertical_segments, decimate_minmax_by_pixel, decimate_signal_by_pixel
+from viz.decimation import bin_reduce_minmax, build_vertical_segments, decimate_signal_by_pixel
 
 
 def test_bin_reduce_minmax_is_exact_not_subsampled():
@@ -37,27 +37,6 @@ def test_bin_reduce_minmax_empty_input():
     assert centers.shape[0] == 0
 
 
-def test_decimate_minmax_by_pixel_passthrough_when_fits():
-    timestamps = np.array([0.0, 1.0, 2.0])
-    minmax = np.array([[-1.0, 1.0], [-2.0, 2.0], [-3.0, 3.0]])
-    t, mn, mx = decimate_minmax_by_pixel(timestamps, minmax, n_pixels=1000)
-    assert np.array_equal(t, timestamps)
-    assert np.array_equal(mn, minmax[:, 0])
-    assert np.array_equal(mx, minmax[:, 1])
-
-
-def test_decimate_minmax_by_pixel_aggregates_when_too_many_signals():
-    n = 10_000
-    timestamps = np.linspace(0, 100, n)
-    minmax = np.column_stack([-np.ones(n), np.ones(n)])
-    minmax[5000] = [-999.0, 999.0]  # outlier que debe sobrevivir al diezmado
-
-    t, mn, mx = decimate_minmax_by_pixel(timestamps, minmax, n_pixels=200)
-    assert len(t) <= 200
-    assert mn.min() == -999.0  # el outlier no se perdió
-    assert mx.max() == 999.0
-
-
 def test_decimate_signal_by_pixel_full_resolution_when_short():
     t = np.arange(100, dtype=np.float64)
     y = np.sin(t)
@@ -80,13 +59,14 @@ def test_decimate_signal_by_pixel_preserves_peak_when_long():
     assert ymin.min() == -500.0
 
 
-def test_build_vertical_segments_shape_and_none_separators():
+def test_build_vertical_segments_shape_and_nan_separators():
     x = np.array([1.0, 2.0])
     y_min = np.array([-1.0, -2.0])
     y_max = np.array([1.0, 2.0])
     xs, ys = build_vertical_segments(x, y_min, y_max)
-    assert len(xs) == 6
-    assert len(ys) == 6
-    assert xs[2] is None and xs[5] is None
+    assert xs.shape == (6,) and ys.shape == (6,)
+    # separador cada 3 posiciones: corta la línea entre segmentos verticales
+    assert np.isnan(xs[2]) and np.isnan(xs[5])
+    assert np.isnan(ys[2]) and np.isnan(ys[5])
     assert ys[0] == -1.0 and ys[1] == 1.0
     assert ys[3] == -2.0 and ys[4] == 2.0

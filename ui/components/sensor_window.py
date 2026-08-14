@@ -64,8 +64,9 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
                 className="panel-central",
                 children=[
                     html.H3(f"Sensor: {sensor}"),
-                    dcc.Graph(id="graph-timeseries", figure=empty_fig),
 
+                    # Orden vertical (Fase 7): señal individual arriba, envolvente global
+                    # debajo y las métricas apiladas al final.
                     html.Div(
                         className="signal-nav",
                         children=[
@@ -85,6 +86,8 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
                         id="metadata-panel-container",
                         children=[build_metadata_panel(0, 0, 0.0, 0.0, 0.0, is_decimated=False)],
                     ),
+
+                    dcc.Graph(id="graph-timeseries", figure=empty_fig),
 
                     html.Div(id="metrics-graphs-container", className="metrics-graphs-container"),
                 ],
