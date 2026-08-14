@@ -17,11 +17,15 @@ de la misma ventana de sensor, con scroll de página (ver ``ui/components/sensor
 """
 from __future__ import annotations
 
+import logging
+
 from dash import Dash, Input, Output, dcc, html
 
 from ui.callbacks.helpers import parse_route
 from ui.callbacks.sensor_window_callbacks import register_callbacks
 from ui.components.sensor_window import build_sensor_window_layout
+from ui.state import DEFAULT_SENSORS_CONFIG_PATH
+from utils.profiling import configure_from_config
 
 _INLINE_CSS = """
 body { background:#F5F6F8; color:#23262D; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin:0; }
@@ -53,6 +57,13 @@ input, .Select-control { background:#FFFFFF; color:#23262D; border:1px solid #D3
 
 
 def create_app() -> Dash:
+    # Fase 7 (§9.3): la instrumentación se resuelve una sola vez, al construir la app.
+    # Apagada por defecto (config/sensors.yaml -> profiling.enabled), se enciende con
+    # ANALIZADOR_PROFILING=1 sin tocar la configuración del proyecto.
+    if configure_from_config(DEFAULT_SENSORS_CONFIG_PATH):
+        logging.basicConfig(format="%(asctime)s %(name)s %(message)s", level=logging.INFO)
+        logging.getLogger("analizador.profiling").info("etapa=profiling.activado")
+
     app = Dash(__name__, title="Analizador UHF/AE", suppress_callback_exceptions=True)
     app.index_string = app.index_string.replace("{%css%}", f"{{%css%}}<style>{_INLINE_CSS}</style>")
     app.layout = html.Div([dcc.Location(id="url", refresh=False), html.Div(id="page-content")])

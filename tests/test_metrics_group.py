@@ -76,3 +76,38 @@ def test_count_bursts_multiple_separated_bursts():
 def test_tasa_pulsos_and_tasa_energia_require_positive_t_w():
     with pytest.raises(AssertionError):
         get_metric("tasa_pulsos").compute(MetricContext(timestamps=np.array([0.0]), T_w=0.0))
+
+
+# --- Normalización perezosa de la matriz de señales (Fase 7, optimización de §9.2) ---
+
+
+def _contexto_perezoso(**kwargs):
+    """Contexto cuya matriz solo existe si alguien la lee; ``llamadas`` cuenta cuántas
+    veces se materializó de verdad."""
+    llamadas = {"n": 0}
+
+    def factory():
+        llamadas["n"] += 1
+        return np.array([[1.0, 2.0], [3.0, 4.0]])
+
+    return MetricContext(signal_matrix_factory=factory, **kwargs), llamadas
+
+
+def test_metrica_que_solo_usa_timestamps_no_materializa_la_matriz():
+    ctx, llamadas = _contexto_perezoso(timestamps=np.arange(300, dtype=np.float64), T_w=60.0)
+    assert np.isclose(get_metric("tasa_pulsos").compute(ctx), 5.0)
+    assert llamadas["n"] == 0  # normalizar aquí es trabajo puro desperdiciado
+
+
+def test_metrica_que_usa_la_matriz_la_materializa_una_sola_vez():
+    ctx, llamadas = _contexto_perezoso(T_w=60.0)
+    get_metric("tasa_energia").compute(ctx)
+    _ = ctx.signal_matrix  # segunda lectura: debe salir de la memoización
+    assert llamadas["n"] == 1
+
+
+def test_matriz_explicita_sigue_teniendo_prioridad_y_no_usa_factory():
+    ctx, llamadas = _contexto_perezoso(T_w=60.0)
+    directo = MetricContext(signal_matrix=np.array([[10.0]]), T_w=60.0)
+    assert directo.signal_matrix.tolist() == [[10.0]]
+    assert llamadas["n"] == 0

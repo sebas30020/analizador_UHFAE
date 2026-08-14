@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from cache.backend import SqliteHdf5CacheBackend
+from cache.warmup import default_warmup_specs, start_background_warmup
 from core.models import EnvironmentalSeries, EventSeries, SensorConfig, SensorName, SignalBlock, load_sensor_configs
 from data.ingest import ingest_experiment
 from data.readers.hdf5_reader import HDF5Reader
@@ -70,11 +71,22 @@ def compute_t0(
 class AppState:
     """Único punto de acceso al dataset cargado y a la navegación de señal activa."""
 
-    def __init__(self, cache_dir: Path = DEFAULT_CACHE_DIR, sensors_config_path: Path = DEFAULT_SENSORS_CONFIG_PATH):
+    def __init__(
+        self,
+        cache_dir: Path = DEFAULT_CACHE_DIR,
+        sensors_config_path: Path = DEFAULT_SENSORS_CONFIG_PATH,
+        warmup_on_load: bool = True,
+    ):
         self._lock = threading.Lock()
         self._dataset: LoadedDataset | None = None
         self._active_index: dict[SensorName, int] = {}
         self._sensors_config_path = sensors_config_path
+        self._cache_dir = cache_dir
+        # Fase 7: el precalentamiento de caché (Fase 3, ``cache/warmup.py``) estaba
+        # implementado y probado pero nunca se llamaba desde la UI. Se dispara al cargar
+        # un dataset, en un hilo daemon. Los benchmarks lo apagan (``warmup_on_load=False``)
+        # para que no contamine la medición de "caché frío" compitiendo por CPU.
+        self._warmup_on_load = warmup_on_load
         self._dataset_version = 0  # 0 = "sin dataset cargado"; se incrementa en cada load_dataset()
         self.cache = SqliteHdf5CacheBackend(cache_dir)
 
@@ -122,6 +134,18 @@ class AppState:
             self._undo_stack = {sensor: [] for sensor in self._active_mask}
             self._redo_stack = {sensor: [] for sensor in self._active_mask}
             self._dataset_version += 1
+
+        if self._warmup_on_load:
+            specs = [
+                spec
+                for sensor in dataset.blocks
+                if dataset.blocks[sensor].data.shape[0] > 0
+                for spec in default_warmup_specs(sensor)
+            ]
+            if specs:
+                start_background_warmup(
+                    self._cache_dir, dataset.blocks, dataset.sensor_configs, dataset.dataset_id, specs
+                )
         return dataset
 
     @property

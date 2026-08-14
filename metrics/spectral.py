@@ -16,6 +16,8 @@ from dataclasses import dataclass
 import numpy as np
 import scipy.fft as sfft
 
+from utils.profiling import stage
+
 
 @dataclass
 class SpectrumResult:
@@ -30,10 +32,11 @@ def compute_spectrum(signal_matrix: np.ndarray, fs_hz: float, freq_limit_hz: flo
     en su fila correspondiente -- se preservan en la salida, el llamador decide si las
     descarta (el motor las excluye antes de retornar puntos, nunca aquí).
     """
-    n_points = signal_matrix.shape[-1]
-    fft_vals = sfft.rfft(signal_matrix, axis=-1, workers=-1)
-    mag2 = np.abs(fft_vals) ** 2
-    freqs = sfft.rfftfreq(n_points, d=1.0 / fs_hz)
+    with stage("metricas.espectro", n_senales=signal_matrix.shape[0], n_muestras=signal_matrix.shape[-1]):
+        n_points = signal_matrix.shape[-1]
+        fft_vals = sfft.rfft(signal_matrix, axis=-1, workers=-1)
+        mag2 = np.abs(fft_vals) ** 2
+        freqs = sfft.rfftfreq(n_points, d=1.0 / fs_hz)
 
-    mask = freqs <= freq_limit_hz
-    return SpectrumResult(freqs_hz=freqs[mask], mag2=mag2[..., mask])
+        mask = freqs <= freq_limit_hz
+        return SpectrumResult(freqs_hz=freqs[mask], mag2=mag2[..., mask])

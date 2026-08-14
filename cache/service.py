@@ -20,6 +20,7 @@ from core.models import SensorConfig, SignalBlock
 from core.normalization import NORMALIZATION_VERSION
 from metrics.engine import compute_group_intrinsic, compute_group_reduction, compute_puntual
 from metrics.registry import get_metric
+from utils.profiling import stage
 
 
 def get_or_compute_puntual(
@@ -51,12 +52,14 @@ def get_or_compute_puntual(
         grouping=None,
     )
 
-    hit = cache.get(key)
-    if hit is not None:
-        timestamps, values = hit.timestamps, hit.values
-    else:
-        timestamps, values = compute_puntual(block, sensor_config, metric_id, params=params, n_workers=n_workers)
-        cache.put(key, canonical_json, dataset_id, sensor_config.name, metric_id, definition.version, timestamps, values)
+    with stage("cache.puntual", sensor=sensor_config.name, metrica=metric_id) as ctx:
+        hit = cache.get(key)
+        ctx["cache"] = "hit" if hit is not None else "miss"
+        if hit is not None:
+            timestamps, values = hit.timestamps, hit.values
+        else:
+            timestamps, values = compute_puntual(block, sensor_config, metric_id, params=params, n_workers=n_workers)
+            cache.put(key, canonical_json, dataset_id, sensor_config.name, metric_id, definition.version, timestamps, values)
 
     if active_mask is not None:
         valid_idx = np.where(block.valid_mask)[0]
@@ -87,35 +90,38 @@ def get_or_compute_group_reduction(
     escribe) y recalcula directamente vía ``metrics.engine``.
     """
     definition = get_metric(metric_id)
-    if active_mask is not None:
-        groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
-        return compute_group_reduction(
-            block, sensor_config, metric_id, groups, reducer=reducer, percentile_q=percentile_q,
-            params=params, extra_mask=active_mask,
+    with stage("cache.grupo_reduccion", sensor=sensor_config.name, metrica=metric_id) as ctx:
+        if active_mask is not None:
+            ctx["cache"] = "bypass"
+            groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
+            return compute_group_reduction(
+                block, sensor_config, metric_id, groups, reducer=reducer, percentile_q=percentile_q,
+                params=params, extra_mask=active_mask,
+            )
+
+        grouping_spec = build_grouping_spec(grouping_mode, grouping_value, reducer=reducer, percentile_q=percentile_q)
+        key, canonical_json = build_cache_key_with_json(
+            dataset_id=dataset_id,
+            sensor=sensor_config.name,
+            metric_id=metric_id,
+            metric_version=definition.version,
+            normalization_version=NORMALIZATION_VERSION,
+            metric_params=params,
+            grouping=grouping_spec,
         )
 
-    grouping_spec = build_grouping_spec(grouping_mode, grouping_value, reducer=reducer, percentile_q=percentile_q)
-    key, canonical_json = build_cache_key_with_json(
-        dataset_id=dataset_id,
-        sensor=sensor_config.name,
-        metric_id=metric_id,
-        metric_version=definition.version,
-        normalization_version=NORMALIZATION_VERSION,
-        metric_params=params,
-        grouping=grouping_spec,
-    )
+        hit = cache.get(key)
+        ctx["cache"] = "hit" if hit is not None else "miss"
+        if hit is not None:
+            is_partial = hit.is_partial if hit.is_partial is not None else np.zeros(hit.values.shape[0], dtype=bool)
+            return hit.timestamps, hit.values, is_partial
 
-    hit = cache.get(key)
-    if hit is not None:
-        is_partial = hit.is_partial if hit.is_partial is not None else np.zeros(hit.values.shape[0], dtype=bool)
-        return hit.timestamps, hit.values, is_partial
-
-    groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
-    t, v, p = compute_group_reduction(
-        block, sensor_config, metric_id, groups, reducer=reducer, percentile_q=percentile_q, params=params
-    )
-    cache.put(key, canonical_json, dataset_id, sensor_config.name, metric_id, definition.version, t, v, is_partial=p)
-    return t, v, p
+        groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
+        t, v, p = compute_group_reduction(
+            block, sensor_config, metric_id, groups, reducer=reducer, percentile_q=percentile_q, params=params
+        )
+        cache.put(key, canonical_json, dataset_id, sensor_config.name, metric_id, definition.version, t, v, is_partial=p)
+        return t, v, p
 
 
 def get_or_compute_group_intrinsic(
@@ -135,27 +141,30 @@ def get_or_compute_group_intrinsic(
     misma estrategia de bypass total de caché cuando hay filtro activo.
     """
     definition = get_metric(metric_id)
-    if active_mask is not None:
+    with stage("cache.grupo_intrinseca", sensor=sensor_config.name, metrica=metric_id) as ctx:
+        if active_mask is not None:
+            ctx["cache"] = "bypass"
+            groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
+            return compute_group_intrinsic(block, sensor_config, metric_id, groups, params=params, extra_mask=active_mask)
+
+        grouping_spec = build_grouping_spec(grouping_mode, grouping_value)  # sin reducer: no aplica
+        key, canonical_json = build_cache_key_with_json(
+            dataset_id=dataset_id,
+            sensor=sensor_config.name,
+            metric_id=metric_id,
+            metric_version=definition.version,
+            normalization_version=NORMALIZATION_VERSION,
+            metric_params=params,
+            grouping=grouping_spec,
+        )
+
+        hit = cache.get(key)
+        ctx["cache"] = "hit" if hit is not None else "miss"
+        if hit is not None:
+            is_partial = hit.is_partial if hit.is_partial is not None else np.zeros(hit.values.shape[0], dtype=bool)
+            return hit.timestamps, hit.values, is_partial
+
         groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
-        return compute_group_intrinsic(block, sensor_config, metric_id, groups, params=params, extra_mask=active_mask)
-
-    grouping_spec = build_grouping_spec(grouping_mode, grouping_value)  # sin reducer: no aplica
-    key, canonical_json = build_cache_key_with_json(
-        dataset_id=dataset_id,
-        sensor=sensor_config.name,
-        metric_id=metric_id,
-        metric_version=definition.version,
-        normalization_version=NORMALIZATION_VERSION,
-        metric_params=params,
-        grouping=grouping_spec,
-    )
-
-    hit = cache.get(key)
-    if hit is not None:
-        is_partial = hit.is_partial if hit.is_partial is not None else np.zeros(hit.values.shape[0], dtype=bool)
-        return hit.timestamps, hit.values, is_partial
-
-    groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
-    t, v, p = compute_group_intrinsic(block, sensor_config, metric_id, groups, params=params)
-    cache.put(key, canonical_json, dataset_id, sensor_config.name, metric_id, definition.version, t, v, is_partial=p)
-    return t, v, p
+        t, v, p = compute_group_intrinsic(block, sensor_config, metric_id, groups, params=params)
+        cache.put(key, canonical_json, dataset_id, sensor_config.name, metric_id, definition.version, t, v, is_partial=p)
+        return t, v, p

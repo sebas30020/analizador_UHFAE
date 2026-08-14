@@ -1,0 +1,242 @@
+{
+  "metadata": {
+    "fecha_utc": "2026-08-14 15:21:54",
+    "dataset": "D:\\data\\data\\main\\med_5_ago_3.hdf5",
+    "dataset_id": "D:\\data\\data\\main\\med_5_ago_3.hdf5:180360059:1786131944741193700",
+    "n_senales_total": 33058,
+    "ingesta_total_ms": 6720.3,
+    "throughput_total_senales_por_s": 4919.2,
+    "repeticiones": 5,
+    "python": "3.13.11",
+    "plataforma": "Windows 11",
+    "procesador": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel"
+  },
+  "resultados": [
+    {
+      "operacion": "Ingesta (matriz global)",
+      "sensor": "UHF",
+      "mediana_ms": 639.56,
+      "min_ms": 639.56,
+      "max_ms": 639.56,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "n_senales": 12484,
+        "throughput_senales_por_s": 19519.7,
+        "n_muestras_por_senal": 3000
+      }
+    },
+    {
+      "operacion": "Ingesta (matriz global)",
+      "sensor": "AE",
+      "mediana_ms": 4902.881,
+      "min_ms": 4902.881,
+      "max_ms": 4902.881,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "n_senales": 20574,
+        "throughput_senales_por_s": 4196.3,
+        "n_muestras_por_senal": 10000
+      }
+    },
+    {
+      "operacion": "Render gráfica #1 (dataset completo)",
+      "sensor": "UHF",
+      "mediana_ms": 63.044,
+      "min_ms": 44.486,
+      "max_ms": 66.554,
+      "repeticiones": 5,
+      "objetivo_ms": 2000.0,
+      "cumple": true,
+      "notas": {
+        "n_senales_dibujadas": 12484,
+        "bytes_json": 1877733
+      }
+    },
+    {
+      "operacion": "Métrica puntual 'rms' (caché frío)",
+      "sensor": "UHF",
+      "mediana_ms": 2805.342,
+      "min_ms": 2805.342,
+      "max_ms": 2805.342,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "dominio": "tiempo",
+        "n_senales": 12484,
+        "senales_por_s": 4450.1
+      }
+    },
+    {
+      "operacion": "Métrica puntual 'feq' (caché frío)",
+      "sensor": "UHF",
+      "mediana_ms": 809.982,
+      "min_ms": 809.982,
+      "max_ms": 809.982,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "dominio": "frecuencia",
+        "n_senales": 12484,
+        "senales_por_s": 15412.7
+      }
+    },
+    {
+      "operacion": "Lectura desde caché 'rms'",
+      "sensor": "UHF",
+      "mediana_ms": 3.354,
+      "min_ms": 3.153,
+      "max_ms": 6.809,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_puntos": 12484
+      }
+    },
+    {
+      "operacion": "Lectura desde caché 'feq'",
+      "sensor": "UHF",
+      "mediana_ms": 3.77,
+      "min_ms": 3.473,
+      "max_ms": 5.324,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_puntos": 12484
+      }
+    },
+    {
+      "operacion": "Cambio de señal (gráfica #2)",
+      "sensor": "UHF",
+      "mediana_ms": 7.392,
+      "min_ms": 7.208,
+      "max_ms": 8.315,
+      "repeticiones": 5,
+      "objetivo_ms": 100.0,
+      "cumple": true,
+      "notas": {
+        "n_muestras": 3000,
+        "diezmada": false
+      }
+    },
+    {
+      "operacion": "Filtro + propagación (#1 + 2 gráficas #3)",
+      "sensor": "UHF",
+      "mediana_ms": 162.928,
+      "min_ms": 143.507,
+      "max_ms": 201.719,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_excluidas": 624,
+        "metrica_grupo": "tasa_pulsos"
+      }
+    },
+    {
+      "operacion": "Render gráfica #1 (dataset completo)",
+      "sensor": "AE",
+      "mediana_ms": 90.134,
+      "min_ms": 43.613,
+      "max_ms": 117.721,
+      "repeticiones": 5,
+      "objetivo_ms": 2000.0,
+      "cumple": true,
+      "notas": {
+        "n_senales_dibujadas": 20574,
+        "bytes_json": 2483556
+      }
+    },
+    {
+      "operacion": "Métrica puntual 'rms' (caché frío)",
+      "sensor": "AE",
+      "mediana_ms": 3061.926,
+      "min_ms": 3061.926,
+      "max_ms": 3061.926,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "dominio": "tiempo",
+        "n_senales": 20574,
+        "senales_por_s": 6719.3
+      }
+    },
+    {
+      "operacion": "Métrica puntual 'feq' (caché frío)",
+      "sensor": "AE",
+      "mediana_ms": 5298.88,
+      "min_ms": 5298.88,
+      "max_ms": 5298.88,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "dominio": "frecuencia",
+        "n_senales": 20574,
+        "senales_por_s": 3882.7
+      }
+    },
+    {
+      "operacion": "Lectura desde caché 'rms'",
+      "sensor": "AE",
+      "mediana_ms": 2.411,
+      "min_ms": 2.243,
+      "max_ms": 2.782,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_puntos": 20574
+      }
+    },
+    {
+      "operacion": "Lectura desde caché 'feq'",
+      "sensor": "AE",
+      "mediana_ms": 2.93,
+      "min_ms": 2.788,
+      "max_ms": 2.988,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_puntos": 20574
+      }
+    },
+    {
+      "operacion": "Cambio de señal (gráfica #2)",
+      "sensor": "AE",
+      "mediana_ms": 7.121,
+      "min_ms": 6.421,
+      "max_ms": 14.942,
+      "repeticiones": 5,
+      "objetivo_ms": 250.0,
+      "cumple": true,
+      "notas": {
+        "n_muestras": 10000,
+        "diezmada": true
+      }
+    },
+    {
+      "operacion": "Filtro + propagación (#1 + 2 gráficas #3)",
+      "sensor": "AE",
+      "mediana_ms": 166.999,
+      "min_ms": 159.57,
+      "max_ms": 220.489,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_excluidas": 1028,
+        "metrica_grupo": "tasa_pulsos"
+      }
+    }
+  ]
+}

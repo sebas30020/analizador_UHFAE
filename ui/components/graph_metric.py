@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from core.models import EventSeries
 from ui.components.event_lines import build_event_line_shapes
 from ui.components.time_axis import TIME_AXIS_TITLE, to_elapsed_minutes
+from utils.profiling import stage
 
 POINT_COLOR = "#4A7BB0"
 PARTIAL_COLOR = "#C2A83E"
@@ -32,33 +33,35 @@ def build_metric_figure(
     El eje horizontal se muestra en minutos transcurridos desde ``t0`` (misma referencia
     que la gráfica tipo #1, ``ui/state.py::compute_t0``), no en timestamp UNIX crudo.
     """
-    fig = go.Figure()
-    timestamps = to_elapsed_minutes(timestamps, t0)
+    with stage("render.grafica3", metrica=label) as ctx:
+        fig = go.Figure()
+        timestamps = to_elapsed_minutes(timestamps, t0)
+        ctx["n_puntos"] = int(timestamps.shape[0])
 
-    if timestamps.shape[0] > 0:
-        colors: str | np.ndarray = POINT_COLOR
-        if is_partial is not None:
-            colors = np.where(is_partial, PARTIAL_COLOR, POINT_COLOR)
-        fig.add_trace(
-            go.Scatter(
-                x=timestamps, y=values, mode="markers",
-                marker=dict(size=6, color=colors), name=label,
+        if timestamps.shape[0] > 0:
+            colors: str | np.ndarray = POINT_COLOR
+            if is_partial is not None:
+                colors = np.where(is_partial, PARTIAL_COLOR, POINT_COLOR)
+            fig.add_trace(
+                go.Scatter(
+                    x=timestamps, y=values, mode="markers",
+                    marker=dict(size=6, color=colors), name=label,
+                )
             )
+
+        y_title = f"{label} ({unit})" if unit else label
+        xaxis_kwargs: dict[str, object] = dict(title=TIME_AXIS_TITLE)
+        if x_range is not None:
+            # Ya debe venir en minutos transcurridos, mismo t0 que la gráfica tipo #1
+            # (PROMPT §5.3: "mismo dominio y rango") -- hoy sin caller que lo pase.
+            xaxis_kwargs["range"] = list(x_range)
+
+        fig.update_layout(
+            shapes=build_event_line_shapes(events, t0, EVENT_COLOR),
+            xaxis=xaxis_kwargs,
+            yaxis=dict(title=y_title),
+            margin=dict(l=60, r=20, t=30, b=40),
+            height=280,
+            showlegend=False,
         )
-
-    y_title = f"{label} ({unit})" if unit else label
-    xaxis_kwargs: dict[str, object] = dict(title=TIME_AXIS_TITLE)
-    if x_range is not None:
-        # Ya debe venir en minutos transcurridos, mismo t0 que la gráfica tipo #1
-        # (PROMPT §5.3: "mismo dominio y rango") -- hoy sin caller que lo pase.
-        xaxis_kwargs["range"] = list(x_range)
-
-    fig.update_layout(
-        shapes=build_event_line_shapes(events, t0, EVENT_COLOR),
-        xaxis=xaxis_kwargs,
-        yaxis=dict(title=y_title),
-        margin=dict(l=60, r=20, t=30, b=40),
-        height=280,
-        showlegend=False,
-    )
-    return fig
+        return fig

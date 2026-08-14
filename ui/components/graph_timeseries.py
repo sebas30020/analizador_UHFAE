@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from core.models import EnvironmentalSeries, EventSeries, SensorConfig, SignalBlock
 from ui.components.event_lines import build_event_line_shapes
 from ui.components.time_axis import TIME_AXIS_TITLE, to_elapsed_minutes
+from utils.profiling import stage
 from viz.decimation import build_vertical_segments
 
 SIGNAL_COLOR = "#4A7BB0"
@@ -43,43 +44,45 @@ def build_timeseries_figure(
     igual que las de metadato inválido. Ambientales/eventos no son "señales" y no se ven
     afectados.
     """
-    fig = go.Figure()
+    with stage("render.grafica1", sensor=sensor_config.name) as ctx:
+        fig = go.Figure()
 
-    valid = block.valid_mask & active_mask
-    if valid.any():
-        t = to_elapsed_minutes(block.timestamps[valid], t0)
-        mm = block.minmax[valid]
-        xs, ys = build_vertical_segments(t, mm[:, 0], mm[:, 1])
-        fig.add_trace(
-            go.Scattergl(
-                x=xs, y=ys, mode="lines+markers",
-                line=dict(color=SIGNAL_COLOR, width=1), marker=dict(size=3, color=SIGNAL_COLOR),
-                name=f"Señal {sensor_config.name} (envolvente)", yaxis="y1",
+        valid = block.valid_mask & active_mask
+        ctx["n_senales"] = int(valid.sum())
+        if valid.any():
+            t = to_elapsed_minutes(block.timestamps[valid], t0)
+            mm = block.minmax[valid]
+            xs, ys = build_vertical_segments(t, mm[:, 0], mm[:, 1])
+            fig.add_trace(
+                go.Scattergl(
+                    x=xs, y=ys, mode="lines+markers",
+                    line=dict(color=SIGNAL_COLOR, width=1), marker=dict(size=3, color=SIGNAL_COLOR),
+                    name=f"Señal {sensor_config.name} (envolvente)", yaxis="y1",
+                )
             )
-        )
 
-    if environmental.timestamps.shape[0] > 0:
-        t_env = to_elapsed_minutes(environmental.timestamps, t0)
-        fig.add_trace(
-            go.Scatter(
-                x=t_env, y=environmental.temperature, mode="lines",
-                name="Temperatura (°C)", line=dict(color=TEMPERATURE_COLOR), yaxis="y2",
+        if environmental.timestamps.shape[0] > 0:
+            t_env = to_elapsed_minutes(environmental.timestamps, t0)
+            fig.add_trace(
+                go.Scatter(
+                    x=t_env, y=environmental.temperature, mode="lines",
+                    name="Temperatura (°C)", line=dict(color=TEMPERATURE_COLOR), yaxis="y2",
+                )
             )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=t_env, y=environmental.humidity, mode="lines",
-                name="Humedad (%)", line=dict(color=HUMIDITY_COLOR, dash="dot"), yaxis="y2",
+            fig.add_trace(
+                go.Scatter(
+                    x=t_env, y=environmental.humidity, mode="lines",
+                    name="Humedad (%)", line=dict(color=HUMIDITY_COLOR, dash="dot"), yaxis="y2",
+                )
             )
-        )
 
-    fig.update_layout(
-        shapes=build_event_line_shapes(events, t0, EVENT_COLOR),
-        xaxis=dict(title=TIME_AXIS_TITLE),
-        yaxis=dict(title=f"Amplitud {sensor_config.name} (cruda)"),
-        yaxis2=dict(title="Temp. (°C) / Humedad (%)", overlaying="y", side="right"),
-        legend=dict(orientation="h", y=1.08),
-        margin=dict(l=60, r=60, t=30, b=40),
-        height=280,
-    )
-    return fig
+        fig.update_layout(
+            shapes=build_event_line_shapes(events, t0, EVENT_COLOR),
+            xaxis=dict(title=TIME_AXIS_TITLE),
+            yaxis=dict(title=f"Amplitud {sensor_config.name} (cruda)"),
+            yaxis2=dict(title="Temp. (°C) / Humedad (%)", overlaying="y", side="right"),
+            legend=dict(orientation="h", y=1.08),
+            margin=dict(l=60, r=60, t=30, b=40),
+            height=280,
+        )
+        return fig

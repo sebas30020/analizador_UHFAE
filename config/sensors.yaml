@@ -29,6 +29,14 @@ sensors:
 parallelism:
   default_workers: "cpu_count_minus_one"
 
+# Instrumentación de tiempos por etapa (PROMPT §9.3, Fase 7, utils/profiling.py).
+# Desactivada por defecto: con enabled=false las etapas no llaman ni a perf_counter.
+# La variable de entorno ANALIZADOR_PROFILING=1 tiene prioridad sobre este archivo,
+# para activarla en una ejecución suelta sin editar la configuración del proyecto.
+profiling:
+  enabled: false
+  level: "INFO"        # nivel del logger "analizador.profiling" cuando está activo
+
 # Normalización (FASE0_DISENO...md §3.1, confirmado por el usuario):
 # x_norm = x_raw / vrange. NO se aplica corrección de offset/línea base
 # (desviación documentada respecto a la Ecuación 4 del PDF de referencia,

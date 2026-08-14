@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
 import numpy as np
@@ -24,7 +24,6 @@ Regimen = Literal["puntual", "grupo"]
 Dominio = Literal["tiempo", "frecuencia"]
 
 
-@dataclass
 class MetricContext:
     """Envoltorio uniforme de entrada para toda función de métrica.
 
@@ -32,13 +31,55 @@ class MetricContext:
     declara necesitar (vía ``requires_spectrum``/``requires_global_timestamps`` o,
     para régimen grupo, los campos de grupo). Mantener un contrato único evita que
     agregar un campo nuevo rompa la firma de las métricas ya escritas.
+
+    ``signal_matrix`` admite además una **construcción perezosa** vía
+    ``signal_matrix_factory``: el llamador entrega una función que materializa la matriz
+    normalizada, y esa función solo se ejecuta si la métrica llega a leer
+    ``ctx.signal_matrix``. Métricas como ``tasa_pulsos`` o ``tasa_rafagas`` se calculan
+    solo con ``timestamps``, y normalizar la matriz "por si acaso" era el trabajo más
+    caro de ``compute_group_intrinsic`` (Fase 7: 4,3 s de los 4,3 s que tardaba propagar
+    un filtro sobre AE, medido con ``benchmarks/run_benchmarks.py``). Los plugins no se
+    enteran: siguen leyendo el mismo atributo.
+
+    No es un ``dataclass`` justamente por eso -- ``signal_matrix`` es una propiedad con
+    memoización, no un campo.
     """
 
-    signal_matrix: np.ndarray | None = None   # (N, M) normalizada -- régimen puntual, por traza
-    timestamps: np.ndarray | None = None      # (N,) -- puntual con requires_global_timestamps, o grupo
-    spectrum: Any | None = None               # SpectrumResult -- puntual con requires_spectrum
-    fs_hz: float | None = None
-    T_w: float | None = None                  # solo régimen grupo (duración declarada de la ventana)
+    __slots__ = ("_signal_matrix", "_signal_matrix_factory", "timestamps", "spectrum", "fs_hz", "T_w")
+
+    def __init__(
+        self,
+        signal_matrix: np.ndarray | None = None,     # (N, M) normalizada -- régimen puntual, por traza
+        timestamps: np.ndarray | None = None,        # (N,) -- puntual con requires_global_timestamps, o grupo
+        spectrum: Any | None = None,                 # SpectrumResult -- puntual con requires_spectrum
+        fs_hz: float | None = None,
+        T_w: float | None = None,                    # solo régimen grupo (duración declarada de la ventana)
+        signal_matrix_factory: Callable[[], np.ndarray] | None = None,
+    ) -> None:
+        self._signal_matrix = signal_matrix
+        self._signal_matrix_factory = signal_matrix_factory
+        self.timestamps = timestamps
+        self.spectrum = spectrum
+        self.fs_hz = fs_hz
+        self.T_w = T_w
+
+    @property
+    def signal_matrix(self) -> np.ndarray | None:
+        """Matriz normalizada ``(N, M)``. Si se construyó con ``signal_matrix_factory``,
+        la primera lectura la materializa y la memoiza (una métrica puede leerla varias
+        veces sin pagar dos normalizaciones)."""
+        if self._signal_matrix is None and self._signal_matrix_factory is not None:
+            self._signal_matrix = self._signal_matrix_factory()
+        return self._signal_matrix
+
+    def __repr__(self) -> str:
+        shape = None if self._signal_matrix is None else self._signal_matrix.shape
+        pendiente = self._signal_matrix is None and self._signal_matrix_factory is not None
+        return (
+            f"MetricContext(signal_matrix={'<perezosa>' if pendiente else shape}, "
+            f"n_timestamps={None if self.timestamps is None else self.timestamps.shape[0]}, "
+            f"fs_hz={self.fs_hz}, T_w={self.T_w})"
+        )
 
 
 @dataclass(frozen=True)

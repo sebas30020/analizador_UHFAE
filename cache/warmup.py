@@ -12,6 +12,7 @@ necesitar ``check_same_thread=False`` ni locks explícitos.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ from core.grouping import GroupingMode
 from core.models import SensorConfig, SensorName, SignalBlock
 
 Regimen = str  # "puntual" | "grupo_reduccion" | "grupo_intrinseca"
+
+_logger = logging.getLogger("analizador.warmup")
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,12 @@ def start_background_warmup(
         cache = SqliteHdf5CacheBackend(cache_dir)
         try:
             done = warm_cache(cache, blocks, sensor_configs, dataset_id, specs)
+        except Exception:
+            # El precalentamiento es puro adelanto de trabajo: si una métrica falla
+            # (dataset degenerado, métrica retirada del registro), la aplicación debe
+            # seguir sirviendo -- el usuario solo pagará ese cálculo cuando lo pida.
+            _logger.exception("etapa=cache.warmup error=fallo_precalentamiento")
+            return
         finally:
             cache.close()
         if on_complete is not None:

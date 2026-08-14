@@ -61,7 +61,10 @@ def test_compute_t0_uses_raw_timestamps_not_valid_mask():
 
 @pytest.fixture
 def app_state(tmp_path) -> AppState:
-    return AppState(cache_dir=tmp_path / "cache")
+    # Sin precalentamiento (Fase 7): estas pruebas son sobre el estado de filtrado, y un
+    # hilo de warmup escribiendo en el caché de ``tmp_path`` mientras pytest lo borra
+    # convertiría un fallo de limpieza en un fallo de prueba intermitente.
+    return AppState(cache_dir=tmp_path / "cache", warmup_on_load=False)
 
 
 def test_load_dataset_initializes_active_mask_all_true(app_state, synthetic_hdf5):

@@ -277,9 +277,18 @@ def compute_group_intrinsic(
             continue
 
         sub_timestamps = block.timestamps[valid_idx]
-        sub_normalized = normalize(block.data[valid_idx], block.vrange[valid_idx])
+        # Normalización perezosa (Fase 7): ``tasa_pulsos`` y ``tasa_rafagas`` se calculan
+        # solo con los timestamps del grupo; materializar su matriz normalizada era el
+        # trabajo dominante de esta función y no lo leía nadie. ``tasa_energia`` sí la
+        # pide, y la paga exactamente igual que antes al tocar ``ctx.signal_matrix``.
+        def _materializar(vi: np.ndarray = valid_idx) -> np.ndarray:
+            return normalize(block.data[vi], block.vrange[vi])
+
         ctx = MetricContext(
-            signal_matrix=sub_normalized, timestamps=sub_timestamps, fs_hz=sensor_config.fs_hz, T_w=g.T_w
+            signal_matrix_factory=_materializar,
+            timestamps=sub_timestamps,
+            fs_hz=sensor_config.fs_hz,
+            T_w=g.T_w,
         )
         value = float(definition.compute(ctx, **params))
 
