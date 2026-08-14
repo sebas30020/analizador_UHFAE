@@ -1,0 +1,15 @@
+# Fase 1 - Núcleo de datos
+numpy==2.5.1
+scipy==1.18.0
+h5py==3.16.0
+PyYAML==6.0.2
+pytest==9.1.1
+mypy==1.14.1
+types-PyYAML==6.0.12.20260724
+
+# Fase 2 - Motor de métricas
+joblib==1.5.3
+
+# Fase 4 - Interfaz
+dash==4.4.1
+plotly==6.9.0

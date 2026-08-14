@@ -1,0 +1,37 @@
+# Perfil de configuración por sensor (FASE0_DISENO_Analizador_UHF_AE.md §6).
+# Valores verificados contra datos reales (D:\data\data\main\med_5_ago_3.hdf5).
+# Ninguna dimensión temporal está cableada en el código: todo módulo que necesite
+# fs/M/freq_limit los lee de aquí a través de core.models.SensorConfig.
+
+schema_version: 1
+
+sensors:
+  UHF:
+    hdf5_group: "signals"
+    fs_hz: 3.0e9
+    n_samples: 3000
+    freq_limit_hz: 100.0e6
+    axis_unit: "us"          # unidad natural del eje para la gráfica tipo #2
+    axis_scale: 1.0e6        # factor para convertir segundos -> unidad natural (s * 1e6 = us)
+    target_block_bytes: 67108864   # 64 MB por bloque de lote (I/O + cálculo)
+
+  AE:
+    hdf5_group: "ae_signals"
+    fs_hz: 1.0e5
+    n_samples: 10000
+    freq_limit_hz: 50.0e3
+    axis_unit: "ms"
+    axis_scale: 1.0e3        # s * 1e3 = ms
+    target_block_bytes: 67108864
+
+# Paralelismo por defecto: os.cpu_count() - 1 (deja un núcleo libre para UI/SO).
+# Ajustable sin cambios de arquitectura si el presupuesto real de la máquina difiere.
+parallelism:
+  default_workers: "cpu_count_minus_one"
+
+# Normalización (FASE0_DISENO...md §3.1, confirmado por el usuario):
+# x_norm = x_raw / vrange. NO se aplica corrección de offset/línea base
+# (desviación documentada respecto a la Ecuación 4 del PDF de referencia,
+# ver AUDITORIA_FORMULAS_PDF_vs_metricas.md §1 - decisión: Opción C).
+normalization:
+  version: "v1_divide_by_vrange"
