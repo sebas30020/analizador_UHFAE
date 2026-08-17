@@ -74,6 +74,35 @@ def test_event_lines_are_batched_shapes_not_add_vline():
     assert all(s.type == "line" and s.yref == "y domain" for s in shapes)
 
 
+def test_show_events_false_yields_no_shapes():
+    # Conmutar la visibilidad de eventos no debe requerir volver a llamar a esta
+    # función con datos distintos -- basta con show_events=False para vaciar las
+    # shapes (archivos_md/prompt-mejora-graficas.md §2).
+    n = 100
+    block = _block(n)
+    env, _ = _empty_environment()
+    t0 = float(block.timestamps[0])
+    events = EventSeries(
+        timestamps=block.timestamps[[10, 20, 30]],
+        event_type=np.array(["SHOT"] * 3, dtype=object),
+    )
+    fig_on = build_timeseries_figure(UHF_CONFIG, block, env, events, t0, np.ones(n, dtype=bool), show_events=True)
+    fig_off = build_timeseries_figure(UHF_CONFIG, block, env, events, t0, np.ones(n, dtype=bool), show_events=False)
+    assert len(fig_on.layout.shapes) == 3
+    assert len(fig_off.layout.shapes) == 0
+
+
+def test_uirevision_is_passed_through_to_layout():
+    n = 10
+    block = _block(n)
+    env, events = _empty_environment()
+    t0 = float(block.timestamps[0])
+    fig = build_timeseries_figure(
+        UHF_CONFIG, block, env, events, t0, np.ones(n, dtype=bool), uirevision="UHF|dataset-1"
+    )
+    assert fig.layout.uirevision == "UHF|dataset-1"
+
+
 def test_envelope_draws_only_active_and_valid_signals():
     n = 4_000
     block = _block(n)

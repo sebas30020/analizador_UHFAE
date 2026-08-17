@@ -51,6 +51,7 @@ input, .Select-control { background:#FFFFFF; color:#23262D; border:1px solid #D3
 .metrics-graphs-container { display:flex; flex-direction:column; gap:14px; }
 .metrics-graph-slot { flex-shrink:0; background:#FFFFFF; border:1px solid #E1E4E9; border-radius:8px;
                        box-shadow: 0 1px 3px rgba(20,22,28,0.06); }
+.metrics-graph-error { padding:14px 16px; color:#8A2C1E; background:#FDEDEA; border-color:#F3C7BE; }
 .filter-status { font-size:12px; color:#5B6472; margin:4px 0 8px 0; }
 .filter-buttons { display:flex; flex-wrap:wrap; gap:6px; }
 """

@@ -185,7 +185,7 @@ with stage("mi.etapa", sensor=sensor) as ctx:
 | Paralelismo configurable | Implementado (`n_workers`), **por defecto serial a propósito**: medido, con estos tamaños el arranque de procesos en Windows cuesta más de lo que ahorra (RMS sobre AE: 3,4 s serial contra 39 s con 8 procesos). |
 | FFT de alto rendimiento | Cumplida. `scipy.fft.rfft` con `workers=-1` sobre la matriz completa, una sola vez por lote, recortada a `freq_limit_hz` del sensor. No se usa `pyFFTW`: la FFT no es el cuello (`feq` sobre AE, la peor combinación, son 3,1 s en frío y luego caché). Tampoco se precalculan planes explícitos — `scipy.fft` mantiene su propia caché de planes y el tamaño de traza es constante por sensor. |
 | Evaluación de Numba | **Descartado, con razón medida pero sin prototipo.** El profiling muestra que el tiempo vive dentro de llamadas vectorizadas de NumPy/SciPy (`rfft`, `mean`, `median`), no en bucles de Python: no hay núcleo interpretado caliente que un JIT pueda acelerar. Sería distinto si entrara una métrica con recurrencia señal a señal (p. ej. una CWT propia); ahí sí habría que prototipar antes de decidir. |
-| Carga perezosa por bloques | **Parcial.** `data/storage.py` escribe por bloques, pero `data/ingest.py` arma la matriz completa en RAM antes de persistir. Con el dataset real (~800 MB AE) cabe de sobra; con datasets varias veces mayores habría que pasar a escritura incremental. Riesgo documentado desde la Fase 1. |
+| Carga perezosa por bloques | **Parcial, mejorado.** `metrics/engine.py::compute_puntual` ahora sí consume `SensorConfig.block_n_signals`: normaliza, calcula el espectro y ejecuta la métrica bloque a bloque, así que su pico de memoria depende del tamaño de bloque (`target_block_bytes`) y no del número total de señales — cerró el hueco que predijo `archivos_md/FASE1_ENTREGA.md` (§ riesgos) y que reventó en la práctica con `med_5_ago_2.hdf5` (247 060 señales UHF, `MemoryError`). Sigue pendiente `data/ingest.py`: arma la matriz completa en RAM antes de persistir (`data/storage.py` sí escribe por bloques). Con datasets varias veces mayores que el de referencia habría que pasar la ingesta también a escritura incremental. |
 | UI no bloqueante | **Parcial.** El precalentamiento del caché corre en un hilo daemon y no bloquea. Pero un cálculo en frío pedido desde la interfaz se ejecuta dentro del callback: con `feq` sobre AE son ~3 s de interfaz congelada, **sin indicador de progreso ni cancelación**. Es la brecha conocida más grande respecto al §9.1. |
 
 ## 5. Cómo se mide (y por qué así)
@@ -207,3 +207,20 @@ with stage("mi.etapa", sensor=sensor) as ctx:
 
 La lógica de agregación y de veredicto vive en `benchmarks/harness.py`, separada del
 arnés que necesita el `.hdf5`, y está cubierta por `tests/test_benchmark_harness.py`.
+
+## 6. Mejora de visualización de eventos y suavizado de métricas
+
+`archivos_md/MEJORA_GRAFICAS_ENTREGA.md` §4 documenta la comparación de rendimiento
+del control de eventos y del suavizado de la gráfica tipo #3. Confirma el punto
+central de §1.1 de este documento con un caso real: una corrida completa de
+`run_benchmarks.py` **no consecutiva** mostró "Filtro + propagación" incumpliendo el
+umbral incluso con el código sin modificar (219 ms AE, contra 158-178 ms de la corrida
+original de este documento) — variabilidad de máquina, no una regresión. La
+comparación válida (mismo proceso, 25 repeticiones consecutivas, antes/después) dio
+diferencias de mediana de ±2-3 ms, dentro del ruido. El suavizado añade 1-2 ms sobre
+el dataset completo cuando está activo.
+
+Dos indicadores nuevos en `benchmarks/run_benchmarks.py` desde entonces: "Render
+gráfica #3 (puntual, dataset completo)" y "Render gráfica #3 (grupo, by_time 60 s)",
+ambos sin umbral (reportar) — antes la #3 solo se medía embebida dentro de "Filtro +
+propagación".

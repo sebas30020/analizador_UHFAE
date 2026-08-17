@@ -20,7 +20,7 @@ def build_metadata_panel(
         className="metadata-panel",
         children=[
             html.Span(f"Índice: {index} / {max(n_total - 1, 0)}", className="meta-item"),
-            html.Span(f"Timestamp: {timestamp:.6f} s ({dt_str} UTC)", className="meta-item"),
+            html.Span(f"Marca de tiempo: {timestamp:.6f} s ({dt_str} UTC)", className="meta-item"),
             html.Span(f"Trigger: {trigger:.6g} V", className="meta-item"),
             html.Span(f"Escala vertical: {vrange:.6g}", className="meta-item"),
             html.Span("Vista diezmada" if is_decimated else "Resolución completa",

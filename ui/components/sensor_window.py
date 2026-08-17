@@ -46,6 +46,10 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
             # dataset-version) + selección pendiente de confirmar con "Filtrar selección".
             dcc.Store(id="filter-version", data=state.filter_version or None),
             dcc.Store(id="pending-exclusion-indices", data=[]),
+            # Shapes de línea de evento precalculadas una vez por dataset (archivos_md/
+            # prompt-mejora-graficas.md §2): el toggle "Mostrar eventos" las parchea con
+            # dash.Patch sin volver a construirlas ni tocar ningún dato de métricas.
+            dcc.Store(id="event-shapes", data=[]),
 
             html.Div(
                 className="panel-lateral",
@@ -53,7 +57,7 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
                     html.Div(
                         className="twin-window-links",
                         children=[
-                            html.A(f"Abrir ventana {other}  ↗", href=f"/sensor/{other}", target="_blank")
+                            html.A(f"Abrir ventana {other} ↗", href=f"/sensor/{other}", target="_blank")
                             for other in other_sensors
                         ],
                     ),

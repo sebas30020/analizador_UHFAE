@@ -23,6 +23,8 @@ def build_timeseries_figure(
     events: EventSeries,
     t0: float,
     active_mask: np.ndarray,
+    show_events: bool = True,
+    uirevision: str | None = None,
 ) -> go.Figure:
     """Envolvente min/max de **todas** las señales + ambientales en eje secundario + eventos.
 
@@ -43,6 +45,10 @@ def build_timeseries_figure(
     combinada con ``valid_mask`` -- las señales excluidas desaparecen de la envolvente,
     igual que las de metadato inválido. Ambientales/eventos no son "señales" y no se ven
     afectados.
+
+    ``show_events``: visibilidad de las líneas de evento (control "Mostrar eventos",
+    ``archivos_md/prompt-mejora-graficas.md`` §2). ``uirevision``: estable frente a
+    redibujados que no deben perder el zoom del usuario.
     """
     with stage("render.grafica1", sensor=sensor_config.name) as ctx:
         fig = go.Figure()
@@ -77,12 +83,13 @@ def build_timeseries_figure(
             )
 
         fig.update_layout(
-            shapes=build_event_line_shapes(events, t0, EVENT_COLOR),
+            shapes=build_event_line_shapes(events, t0, EVENT_COLOR, visible=show_events),
             xaxis=dict(title=TIME_AXIS_TITLE),
             yaxis=dict(title=f"Amplitud {sensor_config.name} (cruda)"),
             yaxis2=dict(title="Temp. (°C) / Humedad (%)", overlaying="y", side="right"),
             legend=dict(orientation="h", y=1.08),
             margin=dict(l=60, r=60, t=30, b=40),
             height=280,
+            uirevision=uirevision,
         )
         return fig

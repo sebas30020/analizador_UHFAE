@@ -8,7 +8,7 @@ import numpy as np
 from metrics.registry import MetricContext, metric
 
 
-@metric(id="teq", label="Tiempo Eq.", regimen="puntual", dominio="tiempo", unit="us", version=1)
+@metric(id="teq", label="Tiempo Eq.", regimen="puntual", dominio="tiempo", unit="µs", version=1)
 def compute(ctx: MetricContext, **params: object) -> np.ndarray:
     s = ctx.signal_matrix
     assert s is not None

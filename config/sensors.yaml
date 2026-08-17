@@ -11,7 +11,7 @@ sensors:
     fs_hz: 3.0e9
     n_samples: 3000
     freq_limit_hz: 100.0e6
-    axis_unit: "us"          # unidad natural del eje para la gráfica tipo #2
+    axis_unit: "µs"          # unidad natural del eje para la gráfica tipo #2
     axis_scale: 1.0e6        # factor para convertir segundos -> unidad natural (s * 1e6 = us)
     target_block_bytes: 67108864   # 64 MB por bloque de lote (I/O + cálculo)
 

@@ -40,7 +40,16 @@ def _effective_mask(valid_mask: np.ndarray, extra_mask: np.ndarray | None) -> np
     return valid_mask if extra_mask is None else (valid_mask & extra_mask)
 
 
-def _split_row_ranges(n_rows: int, n_workers: int) -> list[tuple[int, int]]:
+def _split_row_ranges(n_rows: int, n_workers: int, block_size: int | None = None) -> list[tuple[int, int]]:
+    """Divide ``[0, n_rows)`` en rangos contiguos.
+
+    Con ``block_size`` (bloqueo por memoria, ver ``SensorConfig.block_n_signals``):
+    rangos de a lo sumo ``block_size`` filas, en orden -- su cantidad no depende de
+    ``n_workers``. Sin ``block_size`` (comportamiento histórico): ``n_workers`` rangos
+    de tamaño ~igual.
+    """
+    if block_size is not None and block_size > 0:
+        return [(start, min(start + block_size, n_rows)) for start in range(0, n_rows, block_size)]
     n_workers = max(1, min(n_workers, n_rows)) if n_rows > 0 else 1
     edges = np.linspace(0, n_rows, n_workers + 1, dtype=np.int64)
     return [(int(edges[i]), int(edges[i + 1])) for i in range(n_workers) if edges[i] < edges[i + 1]]
@@ -49,23 +58,25 @@ def _split_row_ranges(n_rows: int, n_workers: int) -> list[tuple[int, int]]:
 def _compute_puntual_chunk(
     definition_id: str,
     data_chunk: np.ndarray,
-    mag2_chunk: np.ndarray | None,
-    freqs_hz: np.ndarray | None,
+    vrange_chunk: np.ndarray,
+    requires_spectrum: bool,
     fs_hz: float,
+    freq_limit_hz: float,
     params: dict,
 ) -> np.ndarray:
     # Reimporta el registro dentro del worker: en el backend "loky" de joblib cada
-    # proceso hijo arranca en frío y necesita repoblar el registro de métricas.
+    # proceso hijo arranca en frío y necesita repoblar el registro de métricas. Normaliza
+    # y calcula el espectro AQUÍ (no en el proceso padre) para que solo cruce el pickle
+    # el bloque crudo -- del tamaño acotado por SensorConfig.block_n_signals -- y nunca
+    # la matriz normalizada completa del sensor.
     from metrics.registry import discover_metrics
-    from metrics.spectral import SpectrumResult
+    from metrics.spectral import compute_spectrum
 
     discover_metrics()
     definition = get_metric(definition_id)
-    spectrum = None
-    if mag2_chunk is not None:
-        assert freqs_hz is not None  # invariante: siempre se pasan juntos (ver compute_puntual)
-        spectrum = SpectrumResult(freqs_hz=freqs_hz, mag2=mag2_chunk)
-    ctx = MetricContext(signal_matrix=data_chunk, spectrum=spectrum, fs_hz=fs_hz)
+    normalized = normalize(data_chunk, vrange_chunk)
+    spectrum = compute_spectrum(normalized, fs_hz, freq_limit_hz) if requires_spectrum else None
+    ctx = MetricContext(signal_matrix=normalized, spectrum=spectrum, fs_hz=fs_hz)
     return np.asarray(definition.compute(ctx, **params))
 
 
@@ -117,33 +128,46 @@ def compute_puntual(
         values = np.asarray(definition.compute(ctx, **params))
         return valid_timestamps, values
 
-    normalized = normalize(block.data[valid_idx], block.vrange[valid_idx])
+    # Fancy indexing con enteros SIEMPRE copia, incluso cuando no excluye nada (caso
+    # normal: todas las señales válidas). normalize() no muta su entrada, así que aquí
+    # es seguro pasarle block.data directamente y ahorrarse esa copia completa.
+    data_subset = block.data if mask.all() else block.data[valid_idx]
+    valid_vrange = block.vrange[valid_idx]
 
-    spectrum = None
-    if definition.requires_spectrum:
-        spectrum = compute_spectrum(normalized, sensor_config.fs_hz, sensor_config.freq_limit_hz)
+    # Cálculo por bloques de tamaño sensor_config.block_n_signals: el pico de memoria de
+    # esta función deja de escalar con el número total de señales y pasa a depender solo
+    # del tamaño de bloque (~target_block_bytes en config/sensors.yaml). Cada bloque se
+    # normaliza y, si la métrica lo requiere, se le calcula el espectro por separado --
+    # nunca se materializa la matriz normalizada (ni la FFT) del sensor completo.
+    n_rows = data_subset.shape[0]
+    row_ranges = _split_row_ranges(n_rows, n_workers, block_size=sensor_config.block_n_signals)
 
-    n_rows = normalized.shape[0]
-    ranges = _split_row_ranges(n_rows, n_workers)
-
-    if len(ranges) <= 1:
-        ctx = MetricContext(signal_matrix=normalized, spectrum=spectrum, fs_hz=sensor_config.fs_hz)
-        values = np.asarray(definition.compute(ctx, **params))
+    if n_workers <= 1 or len(row_ranges) <= 1:
+        chunks = []
+        for start, stop in row_ranges:
+            block_normalized = normalize(data_subset[start:stop], valid_vrange[start:stop])
+            spectrum = (
+                compute_spectrum(block_normalized, sensor_config.fs_hz, sensor_config.freq_limit_hz)
+                if definition.requires_spectrum
+                else None
+            )
+            ctx = MetricContext(signal_matrix=block_normalized, spectrum=spectrum, fs_hz=sensor_config.fs_hz)
+            chunks.append(np.asarray(definition.compute(ctx, **params)))
     else:
-        freqs_hz = spectrum.freqs_hz if spectrum is not None else None
-        chunks = Parallel(n_jobs=len(ranges))(
+        chunks = Parallel(n_jobs=min(n_workers, len(row_ranges)))(
             delayed(_compute_puntual_chunk)(
                 metric_id,
-                normalized[start:stop],
-                spectrum.mag2[start:stop] if spectrum is not None else None,
-                freqs_hz,
+                data_subset[start:stop],
+                valid_vrange[start:stop],
+                definition.requires_spectrum,
                 sensor_config.fs_hz,
+                sensor_config.freq_limit_hz,
                 params,
             )
-            for start, stop in ranges
+            for start, stop in row_ranges
         )
-        values = np.concatenate(chunks)
 
+    values = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float64)
     return valid_timestamps, values
 
 
@@ -219,11 +243,20 @@ def compute_group_reduction(
 
     for g in groups:
         idx = np.arange(g.start_idx, g.end_idx)
-        valid_idx = idx[mask[idx]]
-        if valid_idx.size == 0:
+        group_mask = mask[idx]
+        if not group_mask.any():
             continue
 
-        sub_normalized = normalize(block.data[valid_idx], block.vrange[valid_idx])
+        # Igual que en compute_puntual: si ninguna señal del grupo está excluida, el
+        # grupo es un rango contiguo -- usar slicing (vista) en vez de fancy indexing
+        # evita una copia completa del bloque del grupo.
+        if group_mask.all():
+            group_data, group_vrange = block.data[g.start_idx:g.end_idx], block.vrange[g.start_idx:g.end_idx]
+        else:
+            valid_idx = idx[group_mask]
+            group_data, group_vrange = block.data[valid_idx], block.vrange[valid_idx]
+
+        sub_normalized = normalize(group_data, group_vrange)
         spectrum = (
             compute_spectrum(sub_normalized, sensor_config.fs_hz, sensor_config.freq_limit_hz)
             if definition.requires_spectrum
@@ -280,8 +313,23 @@ def compute_group_intrinsic(
         # Normalización perezosa (Fase 7): ``tasa_pulsos`` y ``tasa_rafagas`` se calculan
         # solo con los timestamps del grupo; materializar su matriz normalizada era el
         # trabajo dominante de esta función y no lo leía nadie. ``tasa_energia`` sí la
-        # pide, y la paga exactamente igual que antes al tocar ``ctx.signal_matrix``.
-        def _materializar(vi: np.ndarray = valid_idx) -> np.ndarray:
+        # pide, y la paga exactamente igual que antes al tocar ``ctx.signal_matrix``. El
+        # slicing/fancy-indexing de ``block.data`` debe quedar DENTRO del cuerpo de la
+        # función (no en un default de argumento) para que siga sin ejecutarse jamás
+        # cuando nadie llama a ``_materializar``.
+        group_all_valid = valid_idx.size == idx.size
+
+        def _materializar(
+            vi: np.ndarray = valid_idx,
+            all_valid: bool = group_all_valid,
+            start: int = g.start_idx,
+            end: int = g.end_idx,
+        ) -> np.ndarray:
+            # Igual que en compute_puntual/compute_group_reduction: slicing en vez de
+            # fancy indexing cuando el grupo no excluye ninguna señal (evita una copia
+            # completa del bloque del grupo).
+            if all_valid:
+                return normalize(block.data[start:end], block.vrange[start:end])
             return normalize(block.data[vi], block.vrange[vi])
 
         ctx = MetricContext(

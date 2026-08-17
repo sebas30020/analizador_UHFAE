@@ -3,11 +3,12 @@ lógica pura de ``ui/callbacks/helpers.py`` y las fachadas de ``cache/service.py
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
-from dash import ALL, Dash, Input, Output, State, ctx, dcc, html
+from dash import ALL, Dash, Input, Output, Patch, State, ctx, dcc, html
 from dash.exceptions import PreventUpdate
 
 from cache.service import get_or_compute_group_intrinsic, get_or_compute_group_reduction, get_or_compute_puntual
@@ -22,12 +23,24 @@ from ui.callbacks.filtering import (
     resolve_timeseries_selection_range,
 )
 from ui.callbacks.helpers import clamp_index, decode_metric_option, parse_compare_indices, resolve_nav_index
+from ui.components.event_lines import build_event_line_shapes
 from ui.components.graph_metric import build_metric_figure
 from ui.components.graph_signal import build_signal_figure
 from ui.components.graph_timeseries import build_timeseries_figure
 from ui.components.metadata_panel import build_metadata_panel
 from ui.components.time_axis import elapsed_minutes_to_unix_seconds
 from ui.state import get_state
+from viz.smoothing import SmoothingSpec
+
+_logger = logging.getLogger("analizador.ui.metrics_graph")
+
+_DEFAULT_SMOOTHING_WINDOW = 5.0
+
+
+def _is_checked(value: list[str] | None, option: str = "show") -> bool:
+    """Traduce el valor de un ``dcc.Checklist`` de una sola opción (patrón ya usado por
+    ``show-raw-signal``) a booleano."""
+    return bool(value and option in value)
 
 _DEFAULT_DATA_DIR_CANDIDATES = [Path(r"D:\data\data\main"), Path.home()]
 
@@ -208,13 +221,68 @@ def register_callbacks(app: Dash) -> None:
         state = get_state()
         return format_filter_status(*state.get_filter_counts(sensor))
 
+    # --- Visibilidad de eventos (archivos_md/prompt-mejora-graficas.md §2) -----------
+
+    @app.callback(
+        Output("event-shapes", "data"),
+        Input("dataset-version", "data"),
+        State("page-sensor", "data"),
+    )
+    def _on_refresh_event_shapes(dataset_version, sensor):
+        # Construye las shapes una sola vez por dataset -- el toggle de visibilidad
+        # (más abajo) las reutiliza vía dash.Patch sin volver a llamar a esta función
+        # ni a ninguna fachada de caché/métricas.
+        state = get_state()
+        dataset = state.dataset
+        if dataset is None:
+            return []
+        return build_event_line_shapes(dataset.events, dataset.t0)
+
+    @app.callback(
+        Output("show-events", "options"),
+        Input("dataset-version", "data"),
+        State("page-sensor", "data"),
+    )
+    def _on_refresh_show_events_options(dataset_version, sensor):
+        state = get_state()
+        dataset = state.dataset
+        has_events = dataset is not None and dataset.events.timestamps.shape[0] > 0
+        label = " Mostrar eventos" if has_events else " Mostrar eventos (sin eventos registrados)"
+        return [{"label": label, "value": "show", "disabled": not has_events}]
+
+    @app.callback(
+        Output("graph-timeseries", "figure", allow_duplicate=True),
+        Output({"type": "graph-metric", "index": ALL}, "figure", allow_duplicate=True),
+        Input("show-events", "value"),
+        State("event-shapes", "data"),
+        State({"type": "graph-metric", "index": ALL}, "id"),
+        prevent_initial_call=True,
+    )
+    def _on_toggle_events(show_events_value, shapes, metric_ids):
+        # Único efecto: parchear layout.shapes en las figuras ya construidas. No lee
+        # AppState, no consulta el caché, no reconstruye ninguna traza -- así conmutar
+        # el control nunca dispara un recálculo de métricas (criterio de aceptación 2).
+        visible_shapes = shapes if _is_checked(show_events_value, "show") else []
+
+        ts_patch = Patch()
+        ts_patch["layout"]["shapes"] = visible_shapes
+
+        metric_patches = []
+        for _ in metric_ids:
+            p = Patch()
+            p["layout"]["shapes"] = visible_shapes
+            metric_patches.append(p)
+
+        return ts_patch, metric_patches
+
     @app.callback(
         Output("graph-timeseries", "figure"),
         Input("dataset-version", "data"),
         Input("filter-version", "data"),
         State("page-sensor", "data"),
+        State("show-events", "value"),
     )
-    def _on_refresh_timeseries(dataset_version, filter_version, sensor):
+    def _on_refresh_timeseries(dataset_version, filter_version, sensor, show_events_value):
         state = get_state()
         dataset = state.dataset
         if dataset is None or sensor not in dataset.blocks:
@@ -222,7 +290,11 @@ def register_callbacks(app: Dash) -> None:
         block = dataset.blocks[sensor]
         cfg = dataset.sensor_configs[sensor]
         active_mask = state.get_active_mask(sensor)
-        return build_timeseries_figure(cfg, block, dataset.environmental, dataset.events, dataset.t0, active_mask)
+        return build_timeseries_figure(
+            cfg, block, dataset.environmental, dataset.events, dataset.t0, active_mask,
+            show_events=_is_checked(show_events_value, "show"),
+            uirevision=f"{sensor}|{dataset.dataset_id}",
+        )
 
     @app.callback(
         Output("graph-signal", "figure"),
@@ -281,11 +353,27 @@ def register_callbacks(app: Dash) -> None:
         Input("grouping-value", "value"),
         Input("grouping-reducer", "value"),
         Input("grouping-percentile-q", "value"),
+        Input("smooth-puntual", "value"),
+        Input("smooth-grupo", "value"),
+        Input("smoothing-method", "value"),
+        Input("smoothing-window", "value"),
+        Input("gap-threshold", "value"),
         State("page-sensor", "data"),
+        State("show-events", "value"),
     )
-    def _on_refresh_metrics(selected_options, dataset_version, filter_version, grouping_mode, grouping_value, reducer, percentile_q, sensor):
+    def _on_refresh_metrics(
+        selected_options, dataset_version, filter_version, grouping_mode, grouping_value, reducer, percentile_q,
+        smooth_puntual_value, smooth_grupo_value, smoothing_method, smoothing_window_value, gap_threshold_value,
+        sensor, show_events_value,
+    ):
         # Cada métrica agregada apila una gráfica más -- sin tope, la propia página hace
         # scroll (reemplaza a la "ventana adicional" de la Fase 5).
+        #
+        # Los controles de suavizado y de corte por huecos son Input (no State): el
+        # requisito de la GUI es que se reflejen de inmediato, sin botón "Aplicar"
+        # (archivos_md/prompt-mejora-graficas.md §4). "Mostrar eventos" es la única
+        # excepción -- ver el callback ``_on_toggle_events`` de más arriba, que lo
+        # resuelve con un parche sin pasar por aquí.
         state = get_state()
         dataset = state.dataset
         if dataset is None or sensor not in dataset.blocks or not selected_options:
@@ -296,34 +384,97 @@ def register_callbacks(app: Dash) -> None:
         active_mask = state.get_active_mask(sensor)
         graphs = []
 
+        show_events = _is_checked(show_events_value, "show")
+        smooth_puntual = _is_checked(smooth_puntual_value, "smooth")
+        smooth_grupo = _is_checked(smooth_grupo_value, "smooth")
+        smoothing_method = smoothing_method or "media_movil_temporal"
+        smoothing_window = float(smoothing_window_value) if smoothing_window_value else _DEFAULT_SMOOTHING_WINDOW
+        gap_threshold = float(gap_threshold_value) if gap_threshold_value else None
+
         for option_value in selected_options:
             regimen, metric_id = decode_metric_option(option_value)
             definition = get_metric(metric_id)
             is_partial = None
 
-            if regimen == "puntual":
-                timestamps, values = get_or_compute_puntual(
-                    state.cache, block, cfg, dataset.dataset_id, metric_id, active_mask=active_mask
-                )
-            elif not grouping_value or grouping_value <= 0:
+            if regimen != "puntual" and (not grouping_value or grouping_value <= 0):
                 continue  # ventana de agrupamiento inválida -- se omite esta gráfica, no rompe las demás
-            elif regimen == "grupo_intrinseca":
-                timestamps, values, is_partial = get_or_compute_group_intrinsic(
-                    state.cache, block, cfg, dataset.dataset_id, metric_id, grouping_mode, float(grouping_value),
-                    active_mask=active_mask,
-                )
-            else:  # grupo_reduccion
-                timestamps, values, is_partial = get_or_compute_group_reduction(
-                    state.cache, block, cfg, dataset.dataset_id, metric_id, grouping_mode, float(grouping_value),
-                    reducer=reducer or "median", percentile_q=float(percentile_q or 75.0),
-                    active_mask=active_mask,
-                )
 
-            fig = build_metric_figure(
-                timestamps, values, dataset.events, dataset.t0,
-                label=definition.label, unit=definition.unit, is_partial=is_partial,
-            )
-            graph_id = {"type": "graph-metric", "index": option_value}
-            graphs.append(html.Div(dcc.Graph(id=graph_id, figure=fig), className="metrics-graph-slot"))
+            # Cada métrica se calcula y grafica de forma aislada: como el Output de este
+            # callback es único (todo el contenedor), un fallo sin capturar (p. ej.
+            # MemoryError en un dataset grande, ver plan de memoria) subiría a Dash como
+            # HTTP 500 y se perderían TAMBIÉN las gráficas que sí se pudieron calcular.
+            try:
+                if regimen == "puntual":
+                    timestamps, values = get_or_compute_puntual(
+                        state.cache, block, cfg, dataset.dataset_id, metric_id, active_mask=active_mask
+                    )
+                elif regimen == "grupo_intrinseca":
+                    timestamps, values, is_partial = get_or_compute_group_intrinsic(
+                        state.cache, block, cfg, dataset.dataset_id, metric_id, grouping_mode, float(grouping_value),
+                        active_mask=active_mask,
+                    )
+                else:  # grupo_reduccion
+                    timestamps, values, is_partial = get_or_compute_group_reduction(
+                        state.cache, block, cfg, dataset.dataset_id, metric_id, grouping_mode, float(grouping_value),
+                        reducer=reducer or "median", percentile_q=float(percentile_q or 75.0),
+                        active_mask=active_mask,
+                    )
+
+                # Régimen de grupo (intrínseca o reducción): unión directa siempre, más
+                # suavizado opcional (§3.3). Régimen puntual: nunca unión directa (sierra
+                # ilegible con miles de puntos, §3.1) -- solo la línea suavizada opcional
+                # sobre marcadores atenuados (§3.2).
+                is_group_regimen = regimen != "puntual"
+                smooth_enabled = smooth_grupo if is_group_regimen else smooth_puntual
+                smoothing_spec = SmoothingSpec(method=smoothing_method, window=smoothing_window) if smooth_enabled else None
+
+                fig = build_metric_figure(
+                    timestamps, values, dataset.events, dataset.t0,
+                    label=definition.label, unit=definition.unit, is_partial=is_partial,
+                    show_events=show_events, connect_points=is_group_regimen,
+                    smoothing=smoothing_spec, gap_threshold=gap_threshold,
+                    uirevision=f"{option_value}|{dataset.dataset_id}",
+                )
+                graph_id = {"type": "graph-metric", "index": option_value}
+                graphs.append(html.Div(dcc.Graph(id=graph_id, figure=fig), className="metrics-graph-slot"))
+            except Exception as exc:
+                _logger.exception(
+                    "etapa=ui.metrics_graph error=fallo_calculo sensor=%s metric_id=%s regimen=%s",
+                    sensor, metric_id, regimen,
+                )
+                graphs.append(
+                    html.Div(
+                        f"No se pudo calcular '{definition.label}': {exc}",
+                        className="metrics-graph-slot metrics-graph-error",
+                    )
+                )
 
         return graphs
+
+    # --- Controles dependientes del bloque "Opciones de visualización" ---------------
+
+    @app.callback(
+        Output("smoothing-window-label", "children"),
+        Input("smoothing-method", "value"),
+    )
+    def _on_refresh_smoothing_window_label(method):
+        # La unidad de la ventana depende del método: tiempo para la media móvil
+        # temporal, número de puntos para la mediana móvil (viz/smoothing.py).
+        if method == "mediana_movil_puntos":
+            return "Ventana de suavizado (cantidad de puntos)"
+        return "Ventana de suavizado (min)"
+
+    @app.callback(
+        Output("smoothing-method", "disabled"),
+        Output("smoothing-window", "disabled"),
+        Output("gap-threshold", "disabled"),
+        Input("smooth-puntual", "value"),
+        Input("smooth-grupo", "value"),
+    )
+    def _on_refresh_smoothing_controls_disabled(smooth_puntual_value, smooth_grupo_value):
+        # Los controles de método/ventana/umbral solo aplican si algún suavizado está
+        # activo -- se atenúan cuando ninguno lo está (§4: "deshabilitar o atenuar los
+        # controles dependientes cuando no apliquen").
+        any_smoothing = _is_checked(smooth_puntual_value, "smooth") or _is_checked(smooth_grupo_value, "smooth")
+        disabled = not any_smoothing
+        return disabled, disabled, disabled
