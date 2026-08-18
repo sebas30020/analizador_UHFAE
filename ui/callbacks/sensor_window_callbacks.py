@@ -4,6 +4,7 @@ lógica pura de ``ui/callbacks/helpers.py`` y las fachadas de ``cache/service.py
 from __future__ import annotations
 
 import logging
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -22,14 +23,24 @@ from ui.callbacks.filtering import (
     resolve_puntual_selection_indices,
     resolve_timeseries_selection_range,
 )
-from ui.callbacks.helpers import clamp_index, decode_metric_option, parse_compare_indices, resolve_nav_index
+from ui.callbacks.helpers import (
+    clamp_index,
+    decode_metric_option,
+    parse_compare_indices,
+    resolve_nav_index,
+    resolve_reference_line_display,
+)
 from ui.components.event_lines import build_event_line_shapes
 from ui.components.graph_metric import build_metric_figure
 from ui.components.graph_signal import build_signal_figure
 from ui.components.graph_timeseries import build_timeseries_figure
 from ui.components.metadata_panel import build_metadata_panel
-from ui.components.time_axis import elapsed_minutes_to_unix_seconds
+from ui.components.reference_line import build_reference_annotation, build_reference_message_annotation, build_reference_shape
+from ui.components.time_axis import elapsed_minutes_to_unix_seconds, to_elapsed_minutes
+from ui.reference_registry import get_reference_registry
 from ui.state import get_state
+from viz.reference_line import build_prefix_sums
+from viz.reference_line import mean_until as compute_reference_mean
 from viz.smoothing import SmoothingSpec
 
 _logger = logging.getLogger("analizador.ui.metrics_graph")
@@ -254,23 +265,50 @@ def register_callbacks(app: Dash) -> None:
         Output("graph-timeseries", "figure", allow_duplicate=True),
         Output({"type": "graph-metric", "index": ALL}, "figure", allow_duplicate=True),
         Input("show-events", "value"),
+        Input("show-reference-line", "value"),
+        Input("reference-line-t", "value"),
         State("event-shapes", "data"),
         State({"type": "graph-metric", "index": ALL}, "id"),
         prevent_initial_call=True,
     )
-    def _on_toggle_events(show_events_value, shapes, metric_ids):
-        # Único efecto: parchear layout.shapes en las figuras ya construidas. No lee
-        # AppState, no consulta el caché, no reconstruye ninguna traza -- así conmutar
-        # el control nunca dispara un recálculo de métricas (criterio de aceptación 2).
-        visible_shapes = shapes if _is_checked(show_events_value, "show") else []
+    def _on_refresh_metric_decorations(show_events_value, show_reference_value, reference_t, event_shapes, metric_ids):
+        # Dueño único de layout.shapes / layout.annotations en las gráficas #3: eventos
+        # (verticales) y línea de referencia (horizontal, archivos_md/prompt-linea-
+        # referencia.md) comparten esas propiedades de layout, así que tienen que
+        # componerse en un solo callback -- dos callbacks parcheando la misma
+        # propiedad de forma independiente se pisarían entre sí.
+        #
+        # Único efecto: parchear las figuras ya construidas. No lee AppState, no
+        # consulta el caché ni el motor de métricas, no reconstruye ninguna traza --
+        # así conmutar cualquiera de los tres controles nunca dispara un recálculo de
+        # métricas (criterio de aceptación 2 y 7). La línea de referencia lee del
+        # registro de proceso (``ui/reference_registry.py``), que ya tiene las series
+        # listas desde el último ``_on_refresh_metrics``.
+        visible_event_shapes = event_shapes if _is_checked(show_events_value, "show") else []
+        reference_enabled = _is_checked(show_reference_value, "show")
+        t_value = float(reference_t) if reference_t is not None else None
 
         ts_patch = Patch()
-        ts_patch["layout"]["shapes"] = visible_shapes
+        ts_patch["layout"]["shapes"] = visible_event_shapes
 
+        registry = get_reference_registry()
         metric_patches = []
-        for _ in metric_ids:
+        for metric_id in metric_ids:
+            option_value = metric_id["index"]
+            mean_lookup = partial(registry.mean_until, option_value)
+            reference_value, reference_message = resolve_reference_line_display(reference_enabled, t_value, mean_lookup)
+
+            shapes = list(visible_event_shapes)
+            annotations: list[dict] = []
+            if reference_value is not None:
+                shapes = [*shapes, build_reference_shape(reference_value)]
+                annotations = [build_reference_annotation(reference_value)]
+            elif reference_message is not None:
+                annotations = [build_reference_message_annotation(reference_message)]
+
             p = Patch()
-            p["layout"]["shapes"] = visible_shapes
+            p["layout"]["shapes"] = shapes
+            p["layout"]["annotations"] = annotations
             metric_patches.append(p)
 
         return ts_patch, metric_patches
@@ -360,29 +398,41 @@ def register_callbacks(app: Dash) -> None:
         Input("gap-threshold", "value"),
         State("page-sensor", "data"),
         State("show-events", "value"),
+        State("show-reference-line", "value"),
+        State("reference-line-t", "value"),
     )
     def _on_refresh_metrics(
         selected_options, dataset_version, filter_version, grouping_mode, grouping_value, reducer, percentile_q,
         smooth_puntual_value, smooth_grupo_value, smoothing_method, smoothing_window_value, gap_threshold_value,
-        sensor, show_events_value,
+        sensor, show_events_value, show_reference_value, reference_t,
     ):
         # Cada métrica agregada apila una gráfica más -- sin tope, la propia página hace
         # scroll (reemplaza a la "ventana adicional" de la Fase 5).
         #
         # Los controles de suavizado y de corte por huecos son Input (no State): el
         # requisito de la GUI es que se reflejen de inmediato, sin botón "Aplicar"
-        # (archivos_md/prompt-mejora-graficas.md §4). "Mostrar eventos" es la única
-        # excepción -- ver el callback ``_on_toggle_events`` de más arriba, que lo
-        # resuelve con un parche sin pasar por aquí.
+        # (archivos_md/prompt-mejora-graficas.md §4). "Mostrar eventos" y la línea de
+        # referencia son la excepción -- ver ``_on_refresh_metric_decorations`` más
+        # arriba, que los resuelve con un parche sin pasar por aquí. Aquí solo se leen
+        # como ``State`` para que la primera figura de cada gráfica ya nazca coherente
+        # con lo que el usuario tenía configurado (criterio "persiste durante la
+        # sesión", §2.4).
         state = get_state()
         dataset = state.dataset
+        registry = get_reference_registry()
         if dataset is None or sensor not in dataset.blocks or not selected_options:
+            # Dataset descargado o selección vaciada: las series que el registro
+            # retenía ya no corresponden a nada visible -- se purgan explícitamente en
+            # vez de dejarlas colgadas hasta el próximo refresco (documento de diseño
+            # §3.2, mismo cuidado que motivó el commit bd5814d).
+            registry.clear()
             return []
 
         block = dataset.blocks[sensor]
         cfg = dataset.sensor_configs[sensor]
         active_mask = state.get_active_mask(sensor)
         graphs = []
+        registry_entries: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
         show_events = _is_checked(show_events_value, "show")
         smooth_puntual = _is_checked(smooth_puntual_value, "smooth")
@@ -390,6 +440,8 @@ def register_callbacks(app: Dash) -> None:
         smoothing_method = smoothing_method or "media_movil_temporal"
         smoothing_window = float(smoothing_window_value) if smoothing_window_value else _DEFAULT_SMOOTHING_WINDOW
         gap_threshold = float(gap_threshold_value) if gap_threshold_value else None
+        reference_enabled = _is_checked(show_reference_value, "show")
+        reference_t_value = float(reference_t) if reference_t is not None else None
 
         for option_value in selected_options:
             regimen, metric_id = decode_metric_option(option_value)
@@ -428,11 +480,31 @@ def register_callbacks(app: Dash) -> None:
                 smooth_enabled = smooth_grupo if is_group_regimen else smooth_puntual
                 smoothing_spec = SmoothingSpec(method=smoothing_method, window=smoothing_window) if smooth_enabled else None
 
+                # Registro de la serie cruda (misma referencia de array, sin copia)
+                # para que la línea de referencia pueda recalcular su promedio al
+                # cambiar ``t`` sin volver a pasar por aquí (``ui/reference_registry.py``).
+                # En minutos transcurridos -- mismas unidades que el control de la GUI
+                # y que el eje X que dibuja ``build_metric_figure``.
+                x_minutes = to_elapsed_minutes(timestamps, dataset.t0)
+                registry_entries[option_value] = (x_minutes, values)
+
+                reference_value: float | None = None
+                reference_message: str | None = None
+                if reference_enabled:
+                    # Se calcula una vez aquí (no en cada cambio de t: eso lo resuelve
+                    # ``_on_refresh_metric_decorations`` leyendo del registro) para que
+                    # la primera figura ya nazca coherente con la configuración vigente.
+                    prefix = build_prefix_sums(x_minutes, values)
+                    reference_value, reference_message = resolve_reference_line_display(
+                        True, reference_t_value, partial(compute_reference_mean, prefix)
+                    )
+
                 fig = build_metric_figure(
                     timestamps, values, dataset.events, dataset.t0,
                     label=definition.label, unit=definition.unit, is_partial=is_partial,
                     show_events=show_events, connect_points=is_group_regimen,
                     smoothing=smoothing_spec, gap_threshold=gap_threshold,
+                    reference_value=reference_value, reference_message=reference_message,
                     uirevision=f"{option_value}|{dataset.dataset_id}",
                 )
                 graph_id = {"type": "graph-metric", "index": option_value}
@@ -449,6 +521,7 @@ def register_callbacks(app: Dash) -> None:
                     )
                 )
 
+        registry.replace_all(registry_entries)
         return graphs
 
     # --- Controles dependientes del bloque "Opciones de visualización" ---------------
@@ -478,3 +551,13 @@ def register_callbacks(app: Dash) -> None:
         any_smoothing = _is_checked(smooth_puntual_value, "smooth") or _is_checked(smooth_grupo_value, "smooth")
         disabled = not any_smoothing
         return disabled, disabled, disabled
+
+    @app.callback(
+        Output("reference-line-t", "disabled"),
+        Input("show-reference-line", "value"),
+    )
+    def _on_refresh_reference_line_control_disabled(show_reference_value):
+        # Mismo patrón que ``_on_refresh_smoothing_controls_disabled``: el campo de
+        # intervalo solo aplica si la línea de referencia está activa
+        # (archivos_md/prompt-linea-referencia.md §2.4).
+        return not _is_checked(show_reference_value, "show")

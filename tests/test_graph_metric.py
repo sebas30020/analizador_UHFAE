@@ -112,3 +112,54 @@ def test_empty_input_does_not_raise():
         smoothing=SmoothingSpec(), connect_points=True,
     )
     assert len(fig.data) == 0
+
+
+def test_reference_value_none_draws_no_shape_or_annotation():
+    n = 10
+    t = np.linspace(0.0, 600.0, n)
+    v = np.arange(n, dtype=np.float64)
+    fig = build_metric_figure(t, v, _empty_events(), 0.0, label="rms", reference_value=None)
+    assert len(fig.layout.shapes) == 0
+    assert len(fig.layout.annotations) == 0
+
+
+def test_reference_value_draws_shape_below_layer_across_full_canvas():
+    n = 10
+    t = np.linspace(0.0, 600.0, n)
+    v = np.arange(n, dtype=np.float64)
+    fig = build_metric_figure(t, v, _empty_events(), 0.0, label="rms", reference_value=4.5)
+    shapes = fig.layout.shapes
+    assert len(shapes) == 1
+    ref_shape = shapes[0]
+    assert ref_shape.xref == "paper"
+    assert ref_shape.x0 == 0 and ref_shape.x1 == 1
+    assert ref_shape.y0 == ref_shape.y1 == 4.5
+    assert ref_shape.layer == "below"
+    assert ref_shape.line.dash == "dot"
+    assert len(fig.layout.annotations) == 1
+    assert "4.5" in fig.layout.annotations[0].text
+
+
+def test_reference_value_coexists_with_event_shapes():
+    n = 10
+    t = np.linspace(0.0, 600.0, n)
+    v = np.arange(n, dtype=np.float64)
+    events = _events(n, 0.0)
+    fig = build_metric_figure(t, v, events, 0.0, label="rms", show_events=True, reference_value=1.0)
+    # Shapes de evento (líneas verticales) + la shape de referencia (horizontal) --
+    # ambas conviven, ninguna reemplaza a la otra.
+    assert len(fig.layout.shapes) == len(events.timestamps) + 1
+
+
+def test_reference_value_unchanged_by_smoothing_or_connect_points():
+    # El valor lo calcula el llamador sobre la serie cruda -- pasar smoothing o
+    # connect_points no debe alterar la shape de referencia (criterio de aceptación 8).
+    n = 30
+    t = np.linspace(0.0, 6000.0, n)
+    v = np.arange(n, dtype=np.float64)
+    fig_plain = build_metric_figure(t, v, _empty_events(), 0.0, label="rms", reference_value=7.0)
+    fig_smoothed = build_metric_figure(
+        t, v, _empty_events(), 0.0, label="rms", reference_value=7.0,
+        smoothing=SmoothingSpec(window=5.0), connect_points=True,
+    )
+    assert fig_plain.layout.shapes[0].y0 == fig_smoothed.layout.shapes[0].y0 == 7.0

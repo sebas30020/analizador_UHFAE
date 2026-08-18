@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 
 from core.models import EventSeries
 from ui.components.event_lines import build_event_line_shapes
+from ui.components.reference_line import build_reference_annotation, build_reference_message_annotation, build_reference_shape
 from ui.components.time_axis import TIME_AXIS_TITLE, to_elapsed_minutes
 from utils.profiling import stage
 from viz.smoothing import SmoothingSpec, smooth, split_on_gaps
@@ -45,6 +46,8 @@ def build_metric_figure(
     connect_points: bool = False,
     smoothing: SmoothingSpec | None = None,
     gap_threshold: float | None = None,
+    reference_value: float | None = None,
+    reference_message: str | None = None,
     uirevision: str | None = None,
 ) -> go.Figure:
     """Puntos de métrica (puntual o de grupo), con unión y suavizado de presentación
@@ -66,6 +69,18 @@ def build_metric_figure(
     corta en vez de unir a través de un hueco de adquisición real. ``None`` resuelve un
     umbral automático a partir del propio espaciado de los datos
     (:func:`viz.smoothing.auto_gap_threshold`).
+
+    ``reference_value``: valor de la línea horizontal de referencia
+    (``archivos_md/prompt-linea-referencia.md``), ya calculado por el llamador con
+    :func:`viz.reference_line.mean_until` sobre la misma serie ``timestamps``/``values``
+    que esta función recibe -- **antes** de cualquier suavizado o unión de puntos, así
+    que el valor no cambia si ``smoothing`` o ``connect_points`` cambian (criterio de
+    aceptación 8). ``None`` no dibuja línea.
+
+    ``reference_message``: mensaje breve de caso borde de la línea de referencia (§2.2:
+    ``t <= 0`` o sin muestras en el intervalo), mostrado en vez del valor cuando
+    ``reference_value`` es ``None`` pero la funcionalidad está activa. ``None`` en
+    ambos -- el caso normal, funcionalidad apagada -- no agrega nada a la gráfica.
 
     ``uirevision``: estable frente a redibujados que no deban perder el zoom del
     usuario (p. ej. conmutar la visibilidad de eventos); cambia cuando cambia el
@@ -127,8 +142,17 @@ def build_metric_figure(
             # ("mismo dominio y rango") -- hoy sin caller que lo pase.
             xaxis_kwargs["range"] = list(x_range)
 
+        shapes = build_event_line_shapes(events, t0, EVENT_COLOR, visible=show_events)
+        annotations: list[dict] = []
+        if reference_value is not None:
+            shapes = [*shapes, build_reference_shape(reference_value)]
+            annotations = [build_reference_annotation(reference_value, unit=unit)]
+        elif reference_message is not None:
+            annotations = [build_reference_message_annotation(reference_message)]
+
         fig.update_layout(
-            shapes=build_event_line_shapes(events, t0, EVENT_COLOR, visible=show_events),
+            shapes=shapes,
+            annotations=annotations,
             xaxis=xaxis_kwargs,
             yaxis=dict(title=y_title),
             margin=dict(l=60, r=20, t=30, b=40),

@@ -12,6 +12,10 @@ los controles de presentación de las gráficas #1 y #3: visibilidad de eventos 
 suavizado de la línea de tendencia. Son controles de presentación puros -- no cambian
 qué se calcula, solo cómo se dibuja lo ya calculado (ver ``viz/smoothing.py`` y
 ``ui/components/graph_metric.py``).
+
+``show-reference-line`` / ``reference-line-t`` (archivos_md/prompt-linea-referencia.md):
+mismo bloque y mismo criterio -- controles de presentación puros, el promedio se calcula
+en ``viz/reference_line.py`` sobre datos ya obtenidos, nunca aquí.
 """
 from __future__ import annotations
 
@@ -20,6 +24,12 @@ from dash import dcc, html
 from core.models import SensorName
 from metrics.registry import list_metrics
 from ui.callbacks.helpers import encode_metric_option
+
+# Duración típica de un experimento en el dataset real de referencia (med_5_ago_3.hdf5,
+# ver archivos_md/PLAN_LINEA_REFERENCIA.md): ~350 minutos. 10 min es un valor por defecto
+# que refleja un tramo inicial representativo sin necesitar ajuste manual antes de ver
+# algo útil.
+_DEFAULT_REFERENCE_T_MIN = 10.0
 
 
 def _all_metric_options() -> list[dict]:
@@ -141,6 +151,24 @@ def build_control_panel(
                 title="Umbral de tiempo a partir del cual la línea se corta en vez de unir a través de un hueco de adquisición. Vacío: se calcula automáticamente a partir del espaciado real de los datos.",
             ),
             dcc.Input(id="gap-threshold", type="number", placeholder="Automático", style={"width": "100%"}),
+
+            html.Div(
+                title="Dibuja, en cada gráfica de métrica, una línea horizontal con el promedio de esa métrica entre el inicio del experimento y el minuto definido más abajo. No recalcula ninguna métrica ni altera el zoom o el paneo ya aplicados.",
+                children=dcc.Checklist(
+                    id="show-reference-line",
+                    options=[{"label": " Mostrar línea de referencia", "value": "show"}],
+                    value=[],
+                ),
+            ),
+            html.Label(
+                "Definir intervalo de referencia (min)",
+                title="Minuto hasta el cual se promedian los datos para calcular la línea de referencia, contado desde el inicio del experimento.",
+            ),
+            dcc.Input(
+                id="reference-line-t",
+                type="number", value=_DEFAULT_REFERENCE_T_MIN, min=0.000001,
+                debounce=True, style={"width": "100%"},
+            ),
 
             html.Hr(),
             html.H4("Filtrado"),

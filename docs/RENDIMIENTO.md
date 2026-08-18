@@ -224,3 +224,72 @@ Dos indicadores nuevos en `benchmarks/run_benchmarks.py` desde entonces: "Render
 gráfica #3 (puntual, dataset completo)" y "Render gráfica #3 (grupo, by_time 60 s)",
 ambos sin umbral (reportar) — antes la #3 solo se medía embebida dentro de "Filtro +
 propagación".
+
+## 7. Línea de referencia horizontal (gráfica #3)
+
+`archivos_md/prompt-linea-referencia.md` §4 exige que la funcionalidad no introduzca
+ningún cuello de botella y que se demuestre contra una línea base medida antes de
+tocar código. Metodología completa en `archivos_md/PLAN_LINEA_REFERENCIA.md` §3.2 y
+§4 (Fase 0 y Fase 6); esta sección resume el resultado.
+
+**Línea base** (antes de implementar, mismo dataset, mismo método): `python -m
+benchmarks.run_benchmarks --dataset med_5_ago_3.hdf5 --repeats 5`, archivada en
+`archivos_md/benchmarks_baseline/baseline_linea_referencia.json`. **Después**:
+misma corrida, mismo proceso, archivada en
+`archivos_md/benchmarks_baseline/despues_linea_referencia.json`.
+
+### 7.1 Sin regresión en lo que ya existía
+
+| Operación | Sensor | Antes | Después |
+|---|---|---:|---:|
+| Render gráfica #3 (puntual, dataset completo) | UHF | 14 ms | 14 ms |
+| Render gráfica #3 (puntual, dataset completo) | AE | 14 ms | 13 ms |
+| Render gráfica #3 (grupo, by_time 60 s) | UHF | 14 ms | 15 ms |
+| Render gráfica #3 (grupo, by_time 60 s) | AE | 15 ms | 14 ms |
+| Filtro + propagación (#1 + 2 gráficas #3) | UHF | 56 ms | 58 ms |
+| Filtro + propagación (#1 + 2 gráficas #3) | AE | 62 ms | 61 ms |
+| Lectura desde caché `rms` | UHF | 1.4 ms | 1.5 ms |
+| Lectura desde caché `feq` | UHF | 1.6 ms | 1.6 ms |
+
+Diferencias de ±1-2 ms, dentro del ruido de máquina descrito en §1.1 — ninguna
+operación existente se movió de orden de magnitud. La funcionalidad apagada (estado
+por defecto, criterio de aceptación 6) tiene, en la práctica, costo cero: nada del
+código de la línea de referencia se ejecuta si `show-reference-line` está
+desactivado (`ui/callbacks/sensor_window_callbacks.py::_on_refresh_metrics` calcula
+el promedio solo si `reference_enabled`).
+
+### 7.2 Costo propio de la funcionalidad
+
+| Operación | Sensor | Mediana | Objetivo | Veredicto |
+|---|---|---:|---:|---|
+| Promedio ingenuo (máscara + `nanmean`) | UHF | 0.0 ms | reportar | — |
+| Construcción de sumas de prefijo (una vez por serie) | UHF | 0.1 ms | reportar | — |
+| Promedio con sumas acumuladas (ya construidas) | UHF | 0.0 ms | reportar | — |
+| Recálculo al cambiar `t` (3 gráficas #3 a la vez) | UHF | 0.0 ms | reportar | — |
+| Conmutar visibilidad (3 gráficas #3) | UHF | 0.0 ms | < 50 ms | CUMPLE |
+| Render gráfica #3 (puntual, línea de referencia activa) | UHF | 14 ms | reportar | — |
+| Render gráfica #3 (puntual, línea de referencia activa) | AE | 13 ms | reportar | — |
+
+Con 12 484 (UHF) y 20 574 (AE) puntos, tanto el promedio ingenuo como el de sumas
+acumuladas quedan por debajo de la resolución del cronómetro (`0.0-0.1 ms`): a este
+volumen de datos la diferencia algorítmica entre ambas estrategias no se alcanza a
+medir con `time.perf_counter`, y así se reporta en vez de inventar una diferencia que
+no está ahí. La justificación de las sumas de prefijo no es que sean medibles más
+rápidas *hoy*, sino que su costo es **O(log n) por cambio de `t`** en vez de **O(n)**:
+la ventaja aparece con datasets bastante más grandes que el de referencia, y queda
+implementada y probada (`tests/test_reference_line.py`) para cuando haga falta.
+
+"Render gráfica #3, línea de referencia activa" es idéntico (±1 ms) a "Render
+gráfica #3 (dataset completo)" del §1 — la línea es una shape y una anotación más en
+un `update_layout` que ya se pagaba, no una traza adicional.
+
+### 7.3 Reproducir esta comparación
+
+```bash
+python -m benchmarks.run_benchmarks --dataset RUTA.hdf5 --repeats 5 --json despues.json
+```
+
+Los benchmarks de la línea de referencia están en el mismo `run_benchmarks.py`, sección
+"Línea de referencia horizontal" del código — reutilizan las series ya cacheadas por
+los pasos 3-4 (`rms`, `feq`, `tasa_pulsos`) en vez de recalcular nada, siguiendo la
+misma disciplina de no introducir trabajo nuevo solo para medir.

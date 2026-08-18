@@ -1,0 +1,468 @@
+{
+  "metadata": {
+    "fecha_utc": "2026-08-18 14:00:43",
+    "dataset": "D:\\data\\data\\main\\med_5_ago_3.hdf5",
+    "dataset_id": "D:\\data\\data\\main\\med_5_ago_3.hdf5:180360059:1786131944741193700",
+    "n_senales_total": 33058,
+    "ingesta_total_ms": 4049.5,
+    "throughput_total_senales_por_s": 8163.5,
+    "repeticiones": 5,
+    "python": "3.13.11",
+    "plataforma": "Windows 11",
+    "procesador": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel"
+  },
+  "resultados": [
+    {
+      "operacion": "Ingesta (matriz global)",
+      "sensor": "UHF",
+      "mediana_ms": 608.499,
+      "min_ms": 608.499,
+      "max_ms": 608.499,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "n_senales": 12484,
+        "throughput_senales_por_s": 20516.1,
+        "n_muestras_por_senal": 3000
+      }
+    },
+    {
+      "operacion": "Ingesta (matriz global)",
+      "sensor": "AE",
+      "mediana_ms": 3116.79,
+      "min_ms": 3116.79,
+      "max_ms": 3116.79,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "n_senales": 20574,
+        "throughput_senales_por_s": 6601.0,
+        "n_muestras_por_senal": 10000
+      }
+    },
+    {
+      "operacion": "Render gráfica #1 (dataset completo)",
+      "sensor": "UHF",
+      "mediana_ms": 25.124,
+      "min_ms": 24.743,
+      "max_ms": 26.017,
+      "repeticiones": 5,
+      "objetivo_ms": 2000.0,
+      "cumple": true,
+      "notas": {
+        "n_senales_dibujadas": 12484,
+        "bytes_json": 1877733
+      }
+    },
+    {
+      "operacion": "Métrica puntual 'rms' (caché frío)",
+      "sensor": "UHF",
+      "mediana_ms": 544.817,
+      "min_ms": 544.817,
+      "max_ms": 544.817,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "dominio": "tiempo",
+        "n_senales": 12484,
+        "senales_por_s": 22914.1
+      }
+    },
+    {
+      "operacion": "Métrica puntual 'feq' (caché frío)",
+      "sensor": "UHF",
+      "mediana_ms": 219.091,
+      "min_ms": 219.091,
+      "max_ms": 219.091,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "dominio": "frecuencia",
+        "n_senales": 12484,
+        "senales_por_s": 56980.8
+      }
+    },
+    {
+      "operacion": "Lectura desde caché 'rms'",
+      "sensor": "UHF",
+      "mediana_ms": 1.52,
+      "min_ms": 1.45,
+      "max_ms": 1.843,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_puntos": 12484
+      }
+    },
+    {
+      "operacion": "Lectura desde caché 'feq'",
+      "sensor": "UHF",
+      "mediana_ms": 1.647,
+      "min_ms": 1.621,
+      "max_ms": 1.665,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_puntos": 12484
+      }
+    },
+    {
+      "operacion": "Render gráfica #3 (puntual, dataset completo)",
+      "sensor": "UHF",
+      "mediana_ms": 13.531,
+      "min_ms": 13.221,
+      "max_ms": 15.716,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "metrica": "rms",
+        "n_puntos": 12484
+      }
+    },
+    {
+      "operacion": "Render gráfica #3 (grupo, by_time 60 s)",
+      "sensor": "UHF",
+      "mediana_ms": 15.206,
+      "min_ms": 14.194,
+      "max_ms": 17.86,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "metrica": "tasa_pulsos",
+        "n_puntos": 109
+      }
+    },
+    {
+      "operacion": "Cambio de señal (gráfica #2)",
+      "sensor": "UHF",
+      "mediana_ms": 3.384,
+      "min_ms": 3.17,
+      "max_ms": 3.614,
+      "repeticiones": 5,
+      "objetivo_ms": 100.0,
+      "cumple": true,
+      "notas": {
+        "n_muestras": 3000,
+        "diezmada": false
+      }
+    },
+    {
+      "operacion": "Filtro + propagación (#1 + 2 gráficas #3)",
+      "sensor": "UHF",
+      "mediana_ms": 57.539,
+      "min_ms": 56.016,
+      "max_ms": 59.811,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_excluidas": 624,
+        "metrica_grupo": "tasa_pulsos"
+      }
+    },
+    {
+      "operacion": "Línea de referencia: promedio ingenuo (máscara + nanmean)",
+      "sensor": "UHF",
+      "mediana_ms": 0.039,
+      "min_ms": 0.032,
+      "max_ms": 0.068,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "metrica": "rms",
+        "n_puntos": 12484
+      }
+    },
+    {
+      "operacion": "Línea de referencia: construcción de sumas de prefijo (una vez por serie)",
+      "sensor": "UHF",
+      "mediana_ms": 0.068,
+      "min_ms": 0.062,
+      "max_ms": 0.098,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "n_puntos": 12484,
+        "bytes_sumas_prefijo": 199760,
+        "bytes_serie_registrada_por_grafica": 149808,
+        "bytes_por_punto": 16.0
+      }
+    },
+    {
+      "operacion": "Línea de referencia: promedio con sumas acumuladas (ya construidas)",
+      "sensor": "UHF",
+      "mediana_ms": 0.002,
+      "min_ms": 0.002,
+      "max_ms": 0.005,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "metrica": "rms",
+        "n_puntos": 12484
+      }
+    },
+    {
+      "operacion": "Línea de referencia: recálculo al cambiar t (3 gráficas #3)",
+      "sensor": "UHF",
+      "mediana_ms": 0.004,
+      "min_ms": 0.004,
+      "max_ms": 0.005,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "n_graficas": 3
+      }
+    },
+    {
+      "operacion": "Línea de referencia: conmutar visibilidad (3 gráficas #3)",
+      "sensor": "UHF",
+      "mediana_ms": 0.008,
+      "min_ms": 0.008,
+      "max_ms": 0.012,
+      "repeticiones": 5,
+      "objetivo_ms": 50.0,
+      "cumple": true,
+      "notas": {
+        "n_graficas": 3,
+        "n_puntos_max": 12484
+      }
+    },
+    {
+      "operacion": "Render gráfica #3 (puntual, línea de referencia activa)",
+      "sensor": "UHF",
+      "mediana_ms": 14.185,
+      "min_ms": 13.071,
+      "max_ms": 14.82,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "metrica": "rms",
+        "n_puntos": 12484
+      }
+    },
+    {
+      "operacion": "Render gráfica #1 (dataset completo)",
+      "sensor": "AE",
+      "mediana_ms": 29.213,
+      "min_ms": 28.647,
+      "max_ms": 30.36,
+      "repeticiones": 5,
+      "objetivo_ms": 2000.0,
+      "cumple": true,
+      "notas": {
+        "n_senales_dibujadas": 20574,
+        "bytes_json": 2483556
+      }
+    },
+    {
+      "operacion": "Métrica puntual 'rms' (caché frío)",
+      "sensor": "AE",
+      "mediana_ms": 486.353,
+      "min_ms": 486.353,
+      "max_ms": 486.353,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "dominio": "tiempo",
+        "n_senales": 20574,
+        "senales_por_s": 42302.6
+      }
+    },
+    {
+      "operacion": "Métrica puntual 'feq' (caché frío)",
+      "sensor": "AE",
+      "mediana_ms": 1478.712,
+      "min_ms": 1478.712,
+      "max_ms": 1478.712,
+      "repeticiones": 1,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "dominio": "frecuencia",
+        "n_senales": 20574,
+        "senales_por_s": 13913.5
+      }
+    },
+    {
+      "operacion": "Lectura desde caché 'rms'",
+      "sensor": "AE",
+      "mediana_ms": 1.44,
+      "min_ms": 1.401,
+      "max_ms": 1.585,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_puntos": 20574
+      }
+    },
+    {
+      "operacion": "Lectura desde caché 'feq'",
+      "sensor": "AE",
+      "mediana_ms": 1.749,
+      "min_ms": 1.722,
+      "max_ms": 1.764,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_puntos": 20574
+      }
+    },
+    {
+      "operacion": "Render gráfica #3 (puntual, dataset completo)",
+      "sensor": "AE",
+      "mediana_ms": 13.22,
+      "min_ms": 12.8,
+      "max_ms": 13.794,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "metrica": "rms",
+        "n_puntos": 20574
+      }
+    },
+    {
+      "operacion": "Render gráfica #3 (grupo, by_time 60 s)",
+      "sensor": "AE",
+      "mediana_ms": 14.401,
+      "min_ms": 14.023,
+      "max_ms": 14.613,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "metrica": "tasa_pulsos",
+        "n_puntos": 233
+      }
+    },
+    {
+      "operacion": "Cambio de señal (gráfica #2)",
+      "sensor": "AE",
+      "mediana_ms": 4.337,
+      "min_ms": 4.185,
+      "max_ms": 4.403,
+      "repeticiones": 5,
+      "objetivo_ms": 250.0,
+      "cumple": true,
+      "notas": {
+        "n_muestras": 10000,
+        "diezmada": true
+      }
+    },
+    {
+      "operacion": "Filtro + propagación (#1 + 2 gráficas #3)",
+      "sensor": "AE",
+      "mediana_ms": 60.592,
+      "min_ms": 58.121,
+      "max_ms": 62.769,
+      "repeticiones": 5,
+      "objetivo_ms": 200.0,
+      "cumple": true,
+      "notas": {
+        "n_excluidas": 1028,
+        "metrica_grupo": "tasa_pulsos"
+      }
+    },
+    {
+      "operacion": "Línea de referencia: promedio ingenuo (máscara + nanmean)",
+      "sensor": "AE",
+      "mediana_ms": 0.043,
+      "min_ms": 0.041,
+      "max_ms": 0.063,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "metrica": "rms",
+        "n_puntos": 20574
+      }
+    },
+    {
+      "operacion": "Línea de referencia: construcción de sumas de prefijo (una vez por serie)",
+      "sensor": "AE",
+      "mediana_ms": 0.09,
+      "min_ms": 0.089,
+      "max_ms": 0.098,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "n_puntos": 20574,
+        "bytes_sumas_prefijo": 329200,
+        "bytes_serie_registrada_por_grafica": 246888,
+        "bytes_por_punto": 16.0
+      }
+    },
+    {
+      "operacion": "Línea de referencia: promedio con sumas acumuladas (ya construidas)",
+      "sensor": "AE",
+      "mediana_ms": 0.001,
+      "min_ms": 0.001,
+      "max_ms": 0.002,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "metrica": "rms",
+        "n_puntos": 20574
+      }
+    },
+    {
+      "operacion": "Línea de referencia: recálculo al cambiar t (3 gráficas #3)",
+      "sensor": "AE",
+      "mediana_ms": 0.004,
+      "min_ms": 0.004,
+      "max_ms": 0.005,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "n_graficas": 3
+      }
+    },
+    {
+      "operacion": "Línea de referencia: conmutar visibilidad (3 gráficas #3)",
+      "sensor": "AE",
+      "mediana_ms": 0.007,
+      "min_ms": 0.007,
+      "max_ms": 0.008,
+      "repeticiones": 5,
+      "objetivo_ms": 50.0,
+      "cumple": true,
+      "notas": {
+        "n_graficas": 3,
+        "n_puntos_max": 20574
+      }
+    },
+    {
+      "operacion": "Render gráfica #3 (puntual, línea de referencia activa)",
+      "sensor": "AE",
+      "mediana_ms": 13.31,
+      "min_ms": 13.144,
+      "max_ms": 13.518,
+      "repeticiones": 5,
+      "objetivo_ms": null,
+      "cumple": null,
+      "notas": {
+        "metrica": "rms",
+        "n_puntos": 20574
+      }
+    }
+  ]
+}

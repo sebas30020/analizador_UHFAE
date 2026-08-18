@@ -11,6 +11,23 @@ Mide, contra un archivo `.hdf5` real:
 5. Aplicación de un filtro con propagación a todas las gráficas -> objetivo < 200 ms.
 6. Cambio de señal en la gráfica tipo #2 -> objetivo < 100 ms (UHF) / < 250 ms (AE).
 
+Además, los benchmarks específicos de la línea de referencia horizontal
+(``archivos_md/prompt-linea-referencia.md`` §4.2, ``archivos_md/PLAN_LINEA_REFERENCIA.md``):
+
+7a. Promedio ingenuo (máscara + ``nanmean``) frente a sumas de prefijo ya construidas,
+    y costo de construir las sumas de prefijo una vez por serie.
+7b. Recálculo del promedio al cambiar ``t`` con varias gráficas #3 presentes a la vez
+    (representativas: una puntual de dominio tiempo, una puntual de dominio
+    frecuencia, una de grupo intrínseca -- mismo criterio de muestreo representativo
+    que ya usa este archivo para METRICA_TIEMPO/METRICA_FRECUENCIA/METRICA_GRUPO).
+7c. Conmutación del selector de visibilidad (construcción de shapes/anotaciones desde
+    el registro ya poblado) -> objetivo < 50 ms, independiente de ``n_puntos``.
+7d. Render de la gráfica #3 con la línea activa, comparable directamente contra
+    "Render gráfica #3 (puntual, dataset completo)" del punto 4b (línea apagada,
+    línea base) para confirmar que no hay regresión con la funcionalidad apagada.
+7e. Memoria de las sumas de prefijo y de la serie retenida por el registro, en función
+    de ``n_puntos``.
+
 Reglas de la medición, para que dos corridas sean comparables:
 
 - **Caché siempre frío al arrancar**: el backend se crea en un directorio temporal
@@ -50,8 +67,12 @@ from metrics.registry import get_metric
 from ui.components.graph_metric import build_metric_figure
 from ui.components.graph_signal import build_signal_figure
 from ui.components.graph_timeseries import build_timeseries_figure
+from ui.components.reference_line import build_reference_annotation, build_reference_shape
+from ui.reference_registry import ReferenceSeriesRegistry
 from ui.state import AppState
 from utils.profiling import get_records, reset_records, set_enabled
+from viz.reference_line import build_prefix_sums
+from viz.reference_line import mean_until as reference_mean_until
 
 # Métricas representativas: una de dominio tiempo (barata, sin FFT) y una de dominio
 # frecuencia (paga la FFT centralizada) -- el par muestra el rango real de costo, que un
@@ -65,6 +86,10 @@ OBJETIVO_RENDER_G1_MS = 2000.0
 OBJETIVO_CACHE_MS = 200.0
 OBJETIVO_FILTRO_MS = 200.0
 OBJETIVO_CAMBIO_SENAL_MS = {"UHF": 100.0, "AE": 250.0}
+# "Prácticamente instantánea" (PROMPT §4.2.3) para la conmutación de la línea de
+# referencia -- construir shapes/anotaciones desde sumas de prefijo ya calculadas es
+# O(1) por gráfica, sin relación con n_puntos; 50 ms deja margen amplio.
+OBJETIVO_TOGGLE_REFERENCIA_MS = 50.0
 
 
 def _serializar(fig: Any) -> int:
@@ -263,6 +288,144 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                     mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
                     objetivo_ms=OBJETIVO_FILTRO_MS,
                     notas={"n_excluidas": int(a_excluir.size), "metrica_grupo": METRICA_GRUPO},
+                )
+            )
+
+            # === Línea de referencia horizontal (archivos_md/prompt-linea-referencia.md
+            # §4.2) =====================================================================
+            #
+            # Series reutilizadas de los pasos anteriores -- misma serie que ya se cacheó
+            # y ya se graficó, mismas unidades que el eje X de la gráfica #3 (minutos
+            # transcurridos desde ``dataset.t0``, ``ui/components/time_axis.py``).
+            x_rms = (ts_rms - dataset.t0) / 60.0
+            ts_feq, vals_feq = calcular(METRICA_FRECUENCIA)  # ya cacheado por el paso 4
+            x_feq = (ts_feq - dataset.t0) / 60.0
+            x_grp = (ts_grp - dataset.t0) / 60.0
+            t_completo = float(x_rms.max()) if x_rms.shape[0] else 0.0
+
+            # --- 7a. Promedio: ingenuo (máscara + nanmean) frente a sumas de prefijo --
+            def promedio_ingenuo() -> float | None:
+                mask = x_rms <= t_completo
+                return float(np.nanmean(vals_rms[mask])) if mask.any() else None
+
+            mediana, mn, mx = measure(promedio_ingenuo, repeats=repeats)
+            resultados.append(
+                BenchmarkResult(
+                    operacion="Línea de referencia: promedio ingenuo (máscara + nanmean)", sensor=sensor,
+                    mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
+                    objetivo_ms=None,
+                    notas={"metrica": METRICA_TIEMPO, "n_puntos": int(x_rms.shape[0])},
+                )
+            )
+
+            def construir_sumas_prefijo():
+                return build_prefix_sums(x_rms, vals_rms)
+
+            mediana, mn, mx = measure(construir_sumas_prefijo, repeats=repeats)
+            prefix_rms = build_prefix_sums(x_rms, vals_rms)
+            bytes_prefijo = prefix_rms.cumulative_sum.nbytes + prefix_rms.cumulative_count.nbytes
+            bytes_serie_registrada = x_rms.nbytes + vals_rms.nbytes
+            resultados.append(
+                BenchmarkResult(
+                    operacion="Línea de referencia: construcción de sumas de prefijo (una vez por serie)",
+                    sensor=sensor, mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
+                    objetivo_ms=None,
+                    notas={
+                        "n_puntos": int(x_rms.shape[0]),
+                        "bytes_sumas_prefijo": int(bytes_prefijo),
+                        "bytes_serie_registrada_por_grafica": int(bytes_serie_registrada),
+                        "bytes_por_punto": round(bytes_prefijo / max(x_rms.shape[0], 1), 2),
+                    },
+                )
+            )
+
+            def promedio_con_sumas_acumuladas() -> float | None:
+                return reference_mean_until(prefix_rms, t_completo)
+
+            mediana, mn, mx = measure(promedio_con_sumas_acumuladas, repeats=repeats)
+            resultados.append(
+                BenchmarkResult(
+                    operacion="Línea de referencia: promedio con sumas acumuladas (ya construidas)",
+                    sensor=sensor, mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
+                    objetivo_ms=None,
+                    notas={"metrica": METRICA_TIEMPO, "n_puntos": int(x_rms.shape[0])},
+                )
+            )
+
+            # --- 7b/7c. Registro de proceso con varias gráficas #3 presentes a la vez --
+            # Representativas (mismo criterio que METRICA_TIEMPO/FRECUENCIA/GRUPO más
+            # arriba): una puntual de dominio tiempo, una puntual de dominio frecuencia,
+            # una de grupo intrínseca -- no es "cada métrica del selector", es la mezcla
+            # de regímenes que ejercita las tres rutas de cálculo distintas.
+            registro_bench = ReferenceSeriesRegistry()
+            series_bench = {
+                "puntual:rms": (x_rms, vals_rms),
+                "puntual:feq": (x_feq, vals_feq),
+                "grupo_intrinseca:tasa_pulsos": (x_grp, vals_grp),
+            }
+            registro_bench.replace_all(series_bench)
+            registro_bench.mean_until("puntual:rms", t_completo)  # calienta las 3 cachés de prefijo
+            registro_bench.mean_until("puntual:feq", t_completo)
+            registro_bench.mean_until("grupo_intrinseca:tasa_pulsos", t_completo)
+
+            def recalculo_al_cambiar_t() -> None:
+                for option in series_bench:
+                    registro_bench.mean_until(option, t_completo)
+
+            mediana, mn, mx = measure(recalculo_al_cambiar_t, repeats=repeats)
+            resultados.append(
+                BenchmarkResult(
+                    operacion="Línea de referencia: recálculo al cambiar t (3 gráficas #3)", sensor=sensor,
+                    mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
+                    objetivo_ms=None,
+                    notas={"n_graficas": len(series_bench)},
+                )
+            )
+
+            def conmutar_visibilidad() -> None:
+                # Mismo cuerpo que el bucle por gráfica de
+                # ``_on_refresh_metric_decorations`` -- lee del registro ya poblado
+                # (sumas de prefijo ya calentadas arriba) y construye shape + anotación.
+                for option in series_bench:
+                    valor = registro_bench.mean_until(option, t_completo)
+                    if valor is not None:
+                        build_reference_shape(valor)
+                        build_reference_annotation(valor)
+
+            mediana, mn, mx = measure(conmutar_visibilidad, repeats=repeats)
+            resultados.append(
+                BenchmarkResult(
+                    operacion="Línea de referencia: conmutar visibilidad (3 gráficas #3)", sensor=sensor,
+                    mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
+                    objetivo_ms=OBJETIVO_TOGGLE_REFERENCIA_MS,
+                    notas={
+                        "n_graficas": len(series_bench),
+                        "n_puntos_max": int(max(x_rms.shape[0], x_feq.shape[0], x_grp.shape[0])),
+                    },
+                )
+            )
+
+            # --- 7d. Render de la gráfica #3 con la línea de referencia activa --------
+            # Comparable directamente contra "Render gráfica #3 (puntual, dataset
+            # completo)" (paso 4b, más arriba): mismos datos, misma figura, única
+            # diferencia es `reference_value` -- esa comparación ES la "línea base con
+            # la funcionalidad apagada" que pide el §4.2.5.
+            valor_referencia = registro_bench.mean_until("puntual:rms", t_completo)
+
+            def render_g3_puntual_con_referencia() -> int:
+                fig = build_metric_figure(
+                    ts_rms, vals_rms, dataset.events, dataset.t0, label=METRICA_TIEMPO,
+                    reference_value=valor_referencia,
+                )
+                return _serializar(fig)
+
+            mediana, mn, mx = measure(render_g3_puntual_con_referencia, repeats=repeats)
+            resultados.append(
+                BenchmarkResult(
+                    operacion="Render gráfica #3 (puntual, línea de referencia activa)", sensor=sensor,
+                    mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
+                    objetivo_ms=None,
+                    notas={"metrica": METRICA_TIEMPO, "n_puntos": int(ts_rms.shape[0])},
                 )
             )
 
