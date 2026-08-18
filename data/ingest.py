@@ -62,7 +62,14 @@ def ingest_sensor(reader: OriginReader, experiment: str, sensor: SensorName) -> 
                 minmax=np.empty((0, 2), dtype=np.float32),
             )
 
-        data = np.concatenate(data_parts, axis=0).astype(np.float32)
+        # np.concatenate de partes float32 ya devuelve float32 -- el .astype
+        # incondicional era una copia completa regalada (ver plan de memoria). Y
+        # data_parts se libera de inmediato: ya no hace falta durante el reordenamiento
+        # y quedaba viva innecesariamente hasta el final de la función.
+        data = np.concatenate(data_parts, axis=0)
+        if data.dtype != np.float32:
+            data = data.astype(np.float32)
+        del data_parts
         timestamps = np.concatenate(ts_parts).astype(np.float64)
         trigger = np.concatenate(trigger_parts).astype(np.float64)
         vrange = np.concatenate(vrange_parts).astype(np.float64)

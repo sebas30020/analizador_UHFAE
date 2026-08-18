@@ -50,7 +50,9 @@ def normalize(data: np.ndarray, vrange: np.ndarray, valid_mask: np.ndarray | Non
     if valid_mask is None:
         valid_mask = vrange > 0.0
 
-    safe_vrange = np.where(valid_mask, vrange, 1.0)
+    # vrange se mantiene float32 antes de dividir: data/vrange en float64 pediría 2x la
+    # memoria de `data` solo para descartarla en el astype final (ver plan de memoria).
+    safe_vrange = np.where(valid_mask, vrange, 1.0).astype(np.float32)
     normalized = data / safe_vrange[:, np.newaxis]
     normalized[~valid_mask, :] = np.nan
-    return normalized.astype(np.float32)
+    return normalized

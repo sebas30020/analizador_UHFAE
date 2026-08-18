@@ -164,6 +164,48 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                     )
                 )
 
+            # --- 4b. Render gráfica tipo #3, régimen puntual (usa el resultado ya
+            # cacheado por el paso 4 -- aísla el costo de construir la figura del costo
+            # de calcular la métrica, necesario para medir el suavizado de presentación
+            # por separado del cálculo). ------------------------------------------------
+            ts_rms, vals_rms = calcular(METRICA_TIEMPO)
+
+            def render_g3_puntual() -> int:
+                fig = build_metric_figure(ts_rms, vals_rms, dataset.events, dataset.t0, label=METRICA_TIEMPO)
+                return _serializar(fig)
+
+            mediana, mn, mx = measure(render_g3_puntual, repeats=repeats)
+            resultados.append(
+                BenchmarkResult(
+                    operacion="Render gráfica #3 (puntual, dataset completo)", sensor=sensor,
+                    mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
+                    objetivo_ms=None,
+                    notas={"metrica": METRICA_TIEMPO, "n_puntos": int(ts_rms.shape[0])},
+                )
+            )
+
+            # --- 4c. Render gráfica tipo #3, régimen de grupo (by_time 60 s) ----------
+            modo, ventana = AGRUPAMIENTO
+            ts_grp, vals_grp, part_grp = get_or_compute_group_intrinsic(
+                state.cache, block, cfg, dataset.dataset_id, METRICA_GRUPO, modo, ventana
+            )
+
+            def render_g3_grupo() -> int:
+                fig = build_metric_figure(
+                    ts_grp, vals_grp, dataset.events, dataset.t0, label=METRICA_GRUPO, is_partial=part_grp
+                )
+                return _serializar(fig)
+
+            mediana, mn, mx = measure(render_g3_grupo, repeats=repeats)
+            resultados.append(
+                BenchmarkResult(
+                    operacion="Render gráfica #3 (grupo, by_time 60 s)", sensor=sensor,
+                    mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
+                    objetivo_ms=None,
+                    notas={"metrica": METRICA_GRUPO, "n_puntos": int(ts_grp.shape[0])},
+                )
+            )
+
             # --- 5. Cambio de señal en la gráfica tipo #2 ------------------------------
             indices = np.linspace(0, block.data.shape[0] - 1, 8, dtype=np.int64)
             contador = {"i": 0}

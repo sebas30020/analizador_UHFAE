@@ -14,13 +14,22 @@ from ui.components.time_axis import to_elapsed_minutes
 EVENT_COLOR = "#D14343"
 
 
-def build_event_line_shapes(events: EventSeries, t0: float, color: str = EVENT_COLOR) -> list[dict]:
+def build_event_line_shapes(
+    events: EventSeries, t0: float, color: str = EVENT_COLOR, visible: bool = True
+) -> list[dict]:
     """Shapes de línea vertical (una por evento) en minutos transcurridos desde ``t0``.
 
     ``yref="y domain"`` con ``y0=0``/``y1=1`` reproduce exactamente lo que hacía
     ``add_vline``: la línea cruza todo el alto del área de dibujo, independiente de la
     escala del eje Y (y sin arrastrar el autorango).
+
+    ``visible=False`` es el punto único de corte del control "Mostrar eventos": los
+    eventos son shapes de layout puros (sin traza, sin entrada de leyenda, sin
+    anotación), así que devolver la lista vacía los oculta por completo con un único
+    ``if``, sin tener que tocar cada gráfica que los consume.
     """
+    if not visible:
+        return []
     return [
         dict(
             type="line", xref="x", yref="y domain",

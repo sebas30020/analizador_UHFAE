@@ -9,7 +9,7 @@ from metrics.registry import MetricContext, metric
 
 @metric(
     id="rise_time",
-    label="Rise Time",
+    label="Tiempo de subida",
     regimen="puntual",
     dominio="tiempo",
     unit="ns",

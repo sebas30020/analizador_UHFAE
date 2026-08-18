@@ -5,7 +5,7 @@ from core.grouping import resolve_groups
 from core.models import SensorConfig, SignalBlock
 from core.normalization import compute_valid_mask
 from metrics.engine import compute_group_intrinsic, compute_group_reduction, compute_puntual
-from metrics.registry import discover_metrics
+from metrics.registry import discover_metrics, list_metrics
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -78,6 +78,55 @@ def test_compute_puntual_parallel_matches_serial(sensor_config):
 
     assert np.allclose(ts1, ts4)
     assert np.allclose(v1, v4)
+
+
+def test_compute_puntual_does_not_mutate_block_data_when_all_valid(sensor_config):
+    # Regresión: cuando mask.all(), compute_puntual pasa block.data directamente a
+    # normalize() (sin fancy-indexing) para ahorrarse una copia -- normalize() no debe
+    # mutar esa vista, o el bloque compartido en cache/UI quedaría corrompido.
+    rng = np.random.default_rng(1)
+    data = rng.normal(size=(6, 4)).astype(np.float32)
+    data_copy = data.copy()
+    block = _block(data=data, timestamps=np.arange(6, dtype=np.float64), vrange=[2.0] * 6)
+
+    compute_puntual(block, sensor_config, "rms")
+
+    assert np.array_equal(block.data, data_copy)
+
+
+def test_compute_puntual_block_computation_matches_single_block_for_every_puntual_metric(sensor_config):
+    # Regresión de memoria: compute_puntual ahora calcula por bloques de tamaño
+    # sensor_config.block_n_signals en vez de sobre la matriz completa. Para TODA
+    # métrica puntual registrada, el resultado por bloques pequeños debe ser idéntico
+    # al de un único bloque grande (matriz completa) -- este es el invariante que
+    # protege el cambio.
+    n_samples = 16
+    rng = np.random.default_rng(7)
+    n = 23  # deliberadamente NO múltiplo del tamaño de bloque pequeño usado abajo
+    data = rng.normal(size=(n, n_samples)).astype(np.float32)
+    timestamps = np.sort(rng.uniform(0, 100, size=n))
+    vrange = rng.uniform(1.0, 5.0, size=n)
+    block = _block(data=data, timestamps=timestamps, vrange=vrange)
+
+    bytes_per_signal = n_samples * 4
+    small_block_cfg = SensorConfig(
+        name="UHF", hdf5_group="signals", fs_hz=1e9, n_samples=n_samples, freq_limit_hz=3e8,
+        axis_unit="us", axis_scale=1e6, target_block_bytes=bytes_per_signal * 3,  # bloques de 3 filas
+    )
+    single_block_cfg = SensorConfig(
+        name="UHF", hdf5_group="signals", fs_hz=1e9, n_samples=n_samples, freq_limit_hz=3e8,
+        axis_unit="us", axis_scale=1e6, target_block_bytes=bytes_per_signal * n,  # un solo bloque
+    )
+    assert small_block_cfg.block_n_signals < n  # de verdad ejercita varios bloques
+    assert single_block_cfg.block_n_signals >= n
+
+    for definition in list_metrics(regimen="puntual"):
+        if definition.requires_global_timestamps:
+            continue  # no pasa por el bucle de bloques (ver compute_puntual)
+        ts_small, v_small = compute_puntual(block, small_block_cfg, definition.id)
+        ts_single, v_single = compute_puntual(block, single_block_cfg, definition.id)
+        assert np.array_equal(ts_small, ts_single), definition.id
+        assert np.allclose(v_small, v_single, equal_nan=True), definition.id
 
 
 def test_compute_puntual_empty_when_no_valid_signals(sensor_config):

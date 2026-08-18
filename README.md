@@ -72,6 +72,7 @@ grupo, no solo la más cercana al clic.
 | [docs/COMO_AGREGAR_UNA_METRICA.md](docs/COMO_AGREGAR_UNA_METRICA.md) | Guía paso a paso: una métrica nueva = un archivo nuevo |
 | [docs/RENDIMIENTO.md](docs/RENDIMIENTO.md) | Indicadores medidos por sensor, metodología, y cómo usar la instrumentación |
 | `FASE*_ENTREGA.md` | Bitácora de cada fase: qué se decidió y por qué |
+| [archivos_md/MEJORA_GRAFICAS_ENTREGA.md](archivos_md/MEJORA_GRAFICAS_ENTREGA.md) | Control de eventos y suavizado de métricas en las gráficas #1/#3: diseño, rendimiento, auditoría de texto |
 | `PROMPT_Analizador_Señales_UHF_AE.md` | Especificación maestra del proyecto |
 
 ## Desarrollo

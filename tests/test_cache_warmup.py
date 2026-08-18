@@ -78,6 +78,34 @@ def test_warm_cache_is_idempotent(tmp_path, sensor_config, block):
     cache.close()
 
 
+def test_warm_cache_continues_after_one_spec_fails(tmp_path, sensor_config, block, monkeypatch):
+    # Regresión: antes, el try/except envolvía TODO el bucle en start_background_warmup
+    # (no warm_cache), así que una métrica que fallara (p. ej. MemoryError en un dataset
+    # grande) abortaba silenciosamente todas las specs restantes, incluidas las del otro
+    # sensor. warm_cache debe registrar el fallo y seguir con la siguiente spec.
+    import cache.warmup as warmup_module
+
+    real = warmup_module.get_or_compute_puntual
+
+    def _flaky(cache, block, cfg, dataset_id, metric_id, **kwargs):
+        if metric_id == "rms":
+            raise MemoryError("simulado")
+        return real(cache, block, cfg, dataset_id, metric_id, **kwargs)
+
+    monkeypatch.setattr(warmup_module, "get_or_compute_puntual", _flaky)
+
+    cache = SqliteHdf5CacheBackend(tmp_path / "cache")
+    specs = [
+        WarmupSpec(sensor="UHF", metric_id="rms", regimen="puntual"),
+        WarmupSpec(sensor="UHF", metric_id="vmax", regimen="puntual"),
+    ]
+
+    done = warm_cache(cache, {"UHF": block}, {"UHF": sensor_config}, "ds1", specs)
+
+    assert done == ["vmax"]  # rms falló y se omitió, vmax se calculó igual
+    cache.close()
+
+
 def test_start_background_warmup_does_not_block_caller(tmp_path, sensor_config, block):
     completed: list[list[str]] = []
 

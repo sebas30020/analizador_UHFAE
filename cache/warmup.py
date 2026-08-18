@@ -73,22 +73,32 @@ def warm_cache(
         block = blocks[spec.sensor]
         cfg = sensor_configs[spec.sensor]
 
-        if spec.regimen == "puntual":
-            get_or_compute_puntual(cache, block, cfg, dataset_id, spec.metric_id, params=spec.params)
-        elif spec.regimen == "grupo_reduccion":
-            assert spec.grouping_mode is not None and spec.grouping_value is not None
-            get_or_compute_group_reduction(
-                cache, block, cfg, dataset_id, spec.metric_id, spec.grouping_mode, spec.grouping_value,
-                reducer=spec.reducer, percentile_q=spec.percentile_q, params=spec.params,
+        try:
+            if spec.regimen == "puntual":
+                get_or_compute_puntual(cache, block, cfg, dataset_id, spec.metric_id, params=spec.params)
+            elif spec.regimen == "grupo_reduccion":
+                assert spec.grouping_mode is not None and spec.grouping_value is not None
+                get_or_compute_group_reduction(
+                    cache, block, cfg, dataset_id, spec.metric_id, spec.grouping_mode, spec.grouping_value,
+                    reducer=spec.reducer, percentile_q=spec.percentile_q, params=spec.params,
+                )
+            elif spec.regimen == "grupo_intrinseca":
+                assert spec.grouping_mode is not None and spec.grouping_value is not None
+                get_or_compute_group_intrinsic(
+                    cache, block, cfg, dataset_id, spec.metric_id, spec.grouping_mode, spec.grouping_value,
+                    params=spec.params,
+                )
+            else:
+                raise ValueError(f"Régimen de warmup desconocido: '{spec.regimen}'")
+        except Exception:
+            # Una métrica que falla (p. ej. MemoryError en un dataset grande) no debe
+            # tumbar el resto del precalentamiento -- ni las demás métricas del mismo
+            # sensor, ni las del otro sensor que vengan después en `specs`.
+            _logger.exception(
+                "etapa=cache.warmup error=fallo_metrica sensor=%s metric_id=%s regimen=%s",
+                spec.sensor, spec.metric_id, spec.regimen,
             )
-        elif spec.regimen == "grupo_intrinseca":
-            assert spec.grouping_mode is not None and spec.grouping_value is not None
-            get_or_compute_group_intrinsic(
-                cache, block, cfg, dataset_id, spec.metric_id, spec.grouping_mode, spec.grouping_value,
-                params=spec.params,
-            )
-        else:
-            raise ValueError(f"Régimen de warmup desconocido: '{spec.regimen}'")
+            continue
         done.append(spec.metric_id)
     return done
 
