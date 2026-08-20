@@ -80,6 +80,32 @@ def format_filter_status(active: int, total: int, n_ops: int) -> str:
     return f"{active}/{total} señales activas · {n_ops} filtro(s) aplicado(s)"
 
 
+def resolve_map_selection_signal_indices(selected_points: list[dict] | None) -> list[int]:
+    """Índices globales de señal seleccionados con lazo/caja en el mapa 2D (#4,
+    ``archivos_md/prompt-mapas2d3d.md`` §5.4) -- vienen directo de ``customdata`` de
+    cada punto (sembrado en ``ui/components/graph_map_2d.py`` con
+    ``dataset.signal_indices``), sin buscar por timestamp como #1/#3: un punto del mapa
+    ya ES una señal, no hace falta resolver ninguna cercanía.
+
+    La traza de resaltado (``HIGHLIGHT_TRACE_INDEX``) no trae ``customdata`` -- sus
+    puntos, si caen dentro del lazo, se descartan sin perder nada: la misma señal ya
+    aparece en la traza principal con su ``customdata`` real.
+    """
+    if not selected_points:
+        return []
+    seen: set[int] = set()
+    result: list[int] = []
+    for point in selected_points:
+        customdata = point.get("customdata")
+        if customdata is None:
+            continue
+        idx = int(customdata)
+        if idx not in seen:
+            seen.add(idx)
+            result.append(idx)
+    return result
+
+
 def resolve_puntual_selection_indices(selected_points: list[dict], t0: float, nearest_index_fn) -> list[int]:
     """Por cada punto seleccionado en una gráfica de métrica puntual, resuelve el índice
     de señal cruda más cercano vía ``nearest_index_fn`` (el llamador inyecta

@@ -20,6 +20,7 @@ from ui.callbacks.filtering import (
     format_filter_status,
     indices_in_time_range,
     resolve_group_selection_indices,
+    resolve_map_selection_signal_indices,
     resolve_puntual_selection_indices,
     resolve_timeseries_selection_range,
 )
@@ -293,16 +294,21 @@ def register_callbacks(app: Dash) -> None:
         Output("pending-exclusion-indices", "data"),
         Input("graph-timeseries", "selectedData"),
         Input({"type": "graph-metric", "index": ALL}, "selectedData"),
+        Input({"type": "graph-map", "index": ALL}, "selectedData"),
         State("page-sensor", "data"),
         State("grouping-mode", "value"),
         State("grouping-value", "value"),
         prevent_initial_call=True,
     )
-    def _on_selection_changed(selected_timeseries, selected_metrics, sensor, grouping_mode, grouping_value):
+    def _on_selection_changed(
+        selected_timeseries, selected_metrics, selected_maps, sensor, grouping_mode, grouping_value,
+    ):
         # Traduce la selección con lazo/rectángulo de Plotly (en CUALQUIERA de las
-        # gráficas #1/#3) a índices crudos de señal a excluir -- todavía no aplica nada,
-        # solo deja la selección "pendiente" hasta que el usuario confirme con el botón
-        # "Filtrar selección" (PROMPT §7.1: seleccionar y filtrar son dos pasos).
+        # gráficas #1/#3, o en el mapa 2D -- #5 nunca dispara esto, Plotly no ofrece
+        # lazo/caja dentro de una escena 3D, decisión D2) a índices crudos de señal a
+        # excluir -- todavía no aplica nada, solo deja la selección "pendiente" hasta
+        # que el usuario confirme con el botón "Filtrar selección" (PROMPT §7.1:
+        # seleccionar y filtrar son dos pasos).
         state = get_state()
         dataset = state.dataset
         if dataset is None or sensor not in dataset.blocks:
@@ -317,6 +323,16 @@ def register_callbacks(app: Dash) -> None:
             x0 = elapsed_minutes_to_unix_seconds(x_range[0], dataset.t0)
             x1 = elapsed_minutes_to_unix_seconds(x_range[1], dataset.t0)
             return indices_in_time_range(block.timestamps, x0, x1).tolist()
+
+        if isinstance(triggered, dict) and triggered.get("type") == "graph-map":
+            if triggered["index"] != "2d":
+                # El mapa 3D (#5) es de solo lectura para filtrado (decisión D2,
+                # archivos_md/PLAN_MAPAS_2D_3D.md) -- en la práctica Plotly nunca
+                # dispara selectedData sobre una escena 3D, esto es solo defensivo.
+                raise PreventUpdate
+            selected_data = ctx.triggered[0]["value"]
+            points = (selected_data or {}).get("points") or []
+            return resolve_map_selection_signal_indices(points)
 
         if isinstance(triggered, dict) and triggered.get("type") == "graph-metric":
             regimen, _metric_id = decode_metric_option(triggered["index"])

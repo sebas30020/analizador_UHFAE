@@ -606,6 +606,41 @@ def test_map_highlight_patch_empty_when_no_map_enabled(app_and_state, monkeypatc
         highlight_fn(1, [])
 
 
+# --- Lazo/caja en el mapa 2D -> filtrado (archivos_md/prompt-mapas2d3d.md §5.4) ------
+
+
+def test_lasso_selection_on_2d_map_returns_customdata_indices(app_and_state, monkeypatch):
+    # Mismo Store "pending-exclusion-indices" que ya alimentan #1/#3 -- el índice de
+    # señal viene directo de customdata, sin resolver por timestamp.
+    from types import SimpleNamespace
+
+    dash_app, _ = app_and_state
+    selected_data = {"points": [{"customdata": 0, "x": 0.1, "y": 0.2}, {"customdata": 2, "x": 0.3, "y": 0.4}]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id={"type": "graph-map", "index": "2d"}, triggered=[{"value": selected_data}]),
+    )
+    fn = _wrapped(dash_app, "pending-exclusion-indices.data")
+    result = fn(None, [], [selected_data], "UHF", "by_time", 60.0)
+    assert result == [0, 2]
+
+
+def test_lasso_selection_on_3d_map_prevents_update(app_and_state, monkeypatch):
+    # Decisión D2: el mapa 3D nunca alimenta el filtrado, aunque en la práctica Plotly
+    # no dispare selectedData sobre una escena 3D -- este es el guardarraíl defensivo.
+    from types import SimpleNamespace
+
+    dash_app, _ = app_and_state
+    selected_data = {"points": [{"customdata": 0}]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id={"type": "graph-map", "index": "3d"}, triggered=[{"value": selected_data}]),
+    )
+    fn = _wrapped(dash_app, "pending-exclusion-indices.data")
+    with pytest.raises(PreventUpdate):
+        fn(None, [], [selected_data], "UHF", "by_time", 60.0)
+
+
 def test_autoplay_tick_advances_to_the_next_signal(app_and_state, monkeypatch):
     dash_app, state = app_and_state
     state.set_active_index("UHF", 0)

@@ -6,6 +6,7 @@ from ui.callbacks.filtering import (
     indices_in_time_range,
     nearest_group_index,
     resolve_group_selection_indices,
+    resolve_map_selection_signal_indices,
     resolve_puntual_selection_indices,
     resolve_timeseries_selection_range,
 )
@@ -121,6 +122,30 @@ def test_resolve_puntual_selection_indices_dedupes_preserving_first_occurrence_o
 
 def test_resolve_puntual_selection_indices_empty_selection():
     assert resolve_puntual_selection_indices([], t0=0.0, nearest_index_fn=lambda s: 0) == []
+
+
+# --- resolve_map_selection_signal_indices (lazo/caja en el mapa 2D, #4) ----------------
+
+def test_resolve_map_selection_signal_indices_reads_customdata_directly():
+    selected_points = [{"customdata": 40, "x": 0.1, "y": 0.2}, {"customdata": 12, "x": 0.3, "y": 0.4}]
+    assert resolve_map_selection_signal_indices(selected_points) == [40, 12]
+
+
+def test_resolve_map_selection_signal_indices_dedupes_preserving_first_occurrence_order():
+    selected_points = [{"customdata": 5}, {"customdata": 9}, {"customdata": 5}]
+    assert resolve_map_selection_signal_indices(selected_points) == [5, 9]
+
+
+def test_resolve_map_selection_signal_indices_skips_points_without_customdata():
+    # Puntos de la traza de resaltado (sin customdata) que caen dentro del lazo -- se
+    # descartan sin perder la señal, que ya viene en la traza principal.
+    selected_points = [{"x": 0.1, "y": 0.2}, {"customdata": 7, "x": 0.3, "y": 0.4}]
+    assert resolve_map_selection_signal_indices(selected_points) == [7]
+
+
+def test_resolve_map_selection_signal_indices_empty_selection():
+    assert resolve_map_selection_signal_indices([]) == []
+    assert resolve_map_selection_signal_indices(None) == []
 
 
 # --- format_filter_status ---------------------------------------------------------------
