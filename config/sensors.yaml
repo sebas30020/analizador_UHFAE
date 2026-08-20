@@ -14,6 +14,8 @@ sensors:
     axis_unit: "µs"          # unidad natural del eje para la gráfica tipo #2
     axis_scale: 1.0e6        # factor para convertir segundos -> unidad natural (s * 1e6 = us)
     target_block_bytes: 67108864   # 64 MB por bloque de lote (I/O + cálculo)
+    decimate_full_view: false      # 3000 muestras caben sin diezmar (gráfica #2)
+    has_trigger_metadata: true
 
   AE:
     hdf5_group: "ae_signals"
@@ -23,6 +25,27 @@ sensors:
     axis_unit: "ms"
     axis_scale: 1.0e3        # s * 1e3 = ms
     target_block_bytes: 67108864
+    decimate_full_view: true       # 10000 muestras: diezma en vista completa, resolución
+                                    # total al hacer zoom (gráfica #2)
+    has_trigger_metadata: true
+
+  # Osciloscopio Keysight en memoria segmentada (rama lectura_keysight), antena UHF.
+  # Valores nominales verificados contra D:\data\data\main\ruido\test-*.h5; el reader
+  # (data/readers/keysight_reader.py) los sobreescribe por archivo vía
+  # OriginReader.sensor_config_overrides() con fs_hz/n_samples leídos de los atributos
+  # reales del archivo -- lo de aquí es el valor por defecto/documentado, nunca lo que
+  # de verdad se usa para calcular (ver docs/ARQUITECTURA.md §8.2).
+  UHF_KS:
+    hdf5_group: "Waveforms"
+    fs_hz: 2.0e10            # 20 GS/s (XInc = 5e-11 s)
+    n_samples: 20000         # ventana de 1 µs, igual duración que UHF, 6.7x más resolución
+    freq_limit_hz: 1.0e9     # decisión del usuario: banda útil de PD sin la cola de ruido
+                              # hasta el ancho de banda del equipo (2.1 GHz)
+    axis_unit: "µs"
+    axis_scale: 1.0e6
+    target_block_bytes: 67108864
+    decimate_full_view: true       # 20000 muestras: mismo criterio que AE
+    has_trigger_metadata: false    # el formato Keysight no registra nivel de disparo por señal
 
 # Paralelismo por defecto: os.cpu_count() - 1 (deja un núcleo libre para UI/SO).
 # Ajustable sin cambios de arquitectura si el presupuesto real de la máquina difiere.

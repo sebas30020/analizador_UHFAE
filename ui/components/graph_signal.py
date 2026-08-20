@@ -20,8 +20,10 @@ def build_signal_figure(
     n_pixels: int = 1600,
     is_raw: bool = False,
 ) -> tuple[go.Figure, bool]:
-    """Traza una señal a resolución completa (UHF siempre; AE si el tramo visible ya
-    cabe en los píxeles disponibles) o diezmada min/max por bin (AE, vista completa).
+    """Traza una señal a resolución completa (siempre en sensores con
+    ``decimate_full_view=False``, como UHF; en los demás -- AE, UHF_KS -- si el tramo
+    visible ya cabe en los píxeles disponibles) o diezmada min/max por bin (vista
+    completa de un sensor con ``decimate_full_view=True``).
 
     ``signal_row``/``overlay_rows`` deben venir **ya normalizados** por el llamador
     (``x_norm = x_raw / vrange``, PROMPT §2.4) salvo que ``is_raw=True`` -- este
@@ -44,7 +46,7 @@ def build_signal_figure(
         else:
             t_view, y_view = t_axis, signal_row
 
-        is_decimated = sensor_config.name == "AE" and t_view.shape[0] > n_pixels
+        is_decimated = sensor_config.decimate_full_view and t_view.shape[0] > n_pixels
         ctx["diezmada"] = is_decimated
         ctx["n_superpuestas"] = len(overlay_rows or [])
 

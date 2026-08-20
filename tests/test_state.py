@@ -163,3 +163,49 @@ def test_get_filter_counts_reports_active_total_ops(app_state, synthetic_hdf5):
     assert total == 4
     assert active == 1
     assert n_ops == 2
+
+
+# --- Carga de un origen Keysight (rama lectura_keysight) -----------------------------
+# synthetic_keysight_h5 (tests/conftest.py) tiene 12 señales UHF_KS, sin AE/eventos/ambiental.
+
+
+def test_load_dataset_keysight_only_populates_uhf_ks(app_state, synthetic_keysight_h5):
+    dataset = app_state.load_dataset(synthetic_keysight_h5)
+    assert set(dataset.blocks.keys()) == {"UHF_KS"}
+    assert dataset.blocks["UHF_KS"].data.shape[0] == 12
+    assert dataset.environmental.timestamps.shape[0] == 0
+    assert dataset.events.timestamps.shape[0] == 0
+
+
+def test_load_dataset_keysight_resets_mask_and_index_for_uhf_ks(app_state, synthetic_keysight_h5):
+    app_state.load_dataset(synthetic_keysight_h5)
+    mask = app_state.get_active_mask("UHF_KS")
+    assert mask.shape[0] == 12
+    assert mask.all()
+    assert app_state.get_active_index("UHF_KS") == 0
+
+
+def test_load_dataset_keysight_applies_effective_sensor_config(app_state, synthetic_keysight_h5):
+    dataset = app_state.load_dataset(synthetic_keysight_h5)
+    cfg = dataset.sensor_configs["UHF_KS"]
+    # fs_hz/n_samples nominales del YAML (2e10, 20000) quedan sobreescritos por los
+    # atributos reales del fixture (XInc=5e-11 -> 2e10 Hz coincide; NumPoints=4).
+    assert cfg.fs_hz == pytest.approx(1.0 / 5e-11)
+    assert cfg.n_samples == 4
+
+
+def test_load_dataset_keysight_does_not_disturb_other_sensor_configs(app_state, synthetic_keysight_h5):
+    dataset = app_state.load_dataset(synthetic_keysight_h5)
+    # UHF/AE siguen con su perfil nominal del YAML -- el override solo tocó UHF_KS.
+    assert dataset.sensor_configs["UHF"].fs_hz == 3.0e9
+    assert dataset.sensor_configs["AE"].fs_hz == 1.0e5
+
+
+def test_load_hdf5_after_keysight_still_populates_uhf_and_ae(app_state, synthetic_keysight_h5, synthetic_hdf5):
+    """No-regresión explícita: cargar un dataset Keysight y luego el formato antiguo en
+    la misma sesión debe dejar el estado exactamente como si solo se hubiera cargado el
+    segundo (§3, §7.9 del plan -- el camino de med_5_ago_3.hdf5 no cambia)."""
+    app_state.load_dataset(synthetic_keysight_h5)
+    dataset = app_state.load_dataset(synthetic_hdf5)
+    assert set(dataset.blocks.keys()) == {"UHF", "AE"}
+    assert app_state.get_active_mask("UHF_KS").shape[0] == 0

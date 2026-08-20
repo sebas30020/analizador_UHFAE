@@ -63,7 +63,7 @@ def resolve_nav_index(
     return clamp_index(int(target), n_total)
 
 
-VALID_SENSORS = ("UHF", "AE")
+VALID_SENSORS = ("UHF", "AE", "UHF_KS")
 DEFAULT_SENSOR = "UHF"
 
 
@@ -71,7 +71,8 @@ def parse_route(pathname: str | None) -> dict:
     """Interpreta la ruta de la URL (PROMPT §6.1 -- ventanas gemelas por sensor):
 
     - ``/`` o cualquier ruta no reconocida -> ventana de sensor por defecto (UHF).
-    - ``/sensor/<UHF|AE>`` -> ventana de sensor completa.
+    - ``/sensor/<UHF|AE|UHF_KS>`` -> ventana de sensor completa. ``UHF_KS`` es el
+      osciloscopio Keysight en memoria segmentada (rama ``lectura_keysight``).
     """
     if pathname:
         parts = [p for p in pathname.split("/") if p]
@@ -79,6 +80,22 @@ def parse_route(pathname: str | None) -> dict:
             return {"page": "sensor", "sensor": parts[1]}
 
     return {"page": "sensor", "sensor": DEFAULT_SENSOR}
+
+
+def resolve_sensor_availability_notice(sensor: str, has_dataset: bool, sensor_has_signals: bool) -> str | None:
+    """Texto del aviso de "esta ventana no aplica a este dataset" (rama
+    ``lectura_keysight``, §4.5 del plan), o ``None`` si no hace falta mostrar nada.
+
+    Con tres sensores posibles y cada origen entregando solo un subconjunto (un archivo
+    Keysight no tiene AE, ``med_5_ago_3.hdf5`` no tiene ``UHF_KS``), una ventana sin
+    señales de su sensor debe decirlo -- la alternativa es dejar tres gráficas vacías
+    sin explicación, indistinguible de un error. Sin dataset cargado no hay nada que
+    avisar todavía (mensaje distinto, "Ningún archivo cargado", ya cubierto en otra
+    parte de la interfaz).
+    """
+    if not has_dataset or sensor_has_signals:
+        return None
+    return f"El archivo cargado no contiene señales del sensor {sensor}."
 
 
 def encode_metric_option(regimen: str, metric_id: str) -> str:

@@ -13,12 +13,18 @@ from typing import Literal
 import numpy as np
 import yaml
 
-SensorName = Literal["UHF", "AE"]
+SensorName = Literal["UHF", "AE", "UHF_KS"]
 
 
 @dataclass(frozen=True)
 class SensorConfig:
-    """Perfil de configuración de un sensor, leído de ``config/sensors.yaml``."""
+    """Perfil de configuración de un sensor, leído de ``config/sensors.yaml``.
+
+    ``decimate_full_view``/``has_trigger_metadata`` son propiedades del origen físico,
+    no literales de presentación: qué sensor diezma en vista completa (gráfica #2) y
+    cuál trae nivel de disparo por señal varía según el instrumento, así que viven aquí
+    en vez de estar cableadas por nombre de sensor en ``ui/``.
+    """
 
     name: SensorName
     hdf5_group: str
@@ -28,6 +34,8 @@ class SensorConfig:
     axis_unit: str
     axis_scale: float
     target_block_bytes: int
+    decimate_full_view: bool = False
+    has_trigger_metadata: bool = True
 
     @property
     def duration_s(self) -> float:
@@ -151,6 +159,8 @@ def load_sensor_configs(path: str | Path) -> dict[SensorName, SensorConfig]:
             axis_unit=cfg["axis_unit"],
             axis_scale=float(cfg["axis_scale"]),
             target_block_bytes=int(cfg["target_block_bytes"]),
+            decimate_full_view=bool(cfg.get("decimate_full_view", False)),
+            has_trigger_metadata=bool(cfg.get("has_trigger_metadata", True)),
         )
     return configs
 
