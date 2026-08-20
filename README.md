@@ -46,11 +46,13 @@ métricas más usadas, sin bloquear la interfaz.
 
 De arriba abajo:
 
-1. **Señal individual** (gráfica tipo #2) con sus controles: *Anterior* / *Siguiente*,
-   índice directo, *Comparar con índices* para superponer otras señales, y *Ver señal
-   cruda* para inspeccionar la traza sin normalizar. Debajo, la barra de metadatos:
-   índice, timestamp UTC, trigger (o "no registrado" en sensores como `UHF_KS` cuyo
-   origen no lo mide), escala vertical y si la vista está diezmada.
+1. **Señal individual** (gráfica tipo #2) con sus controles: *Anterior* / *Siguiente*
+   (saltan las señales excluidas por el filtro), índice directo, **Auto-play** — recorre
+   las señales activas en bucle a la velocidad elegida en el control junto al botón — ,
+   *Comparar con índices* para superponer otras señales, y *Ver señal cruda* para
+   inspeccionar la traza sin normalizar. Debajo, la barra de metadatos: índice,
+   timestamp UTC, trigger (o "no registrado" en sensores como `UHF_KS` cuyo origen no lo
+   mide), escala vertical y si la vista está diezmada.
 2. **Serie temporal global** (gráfica tipo #1): la envolvente min/max de **todas** las
    señales, con temperatura y humedad en el eje derecho y una línea vertical roja por
    evento. Aquí no hay diezmado: se dibuja un segmento por señal, sean 12 000 o 20 000.
@@ -86,6 +88,7 @@ grupo, no solo la más cercana al clic.
 | [archivos_md/MEJORA_GRAFICAS_ENTREGA.md](archivos_md/MEJORA_GRAFICAS_ENTREGA.md) | Control de eventos y suavizado de métricas en las gráficas #1/#3: diseño, rendimiento, auditoría de texto |
 | [archivos_md/esquema_keysight_h5.md](archivos_md/esquema_keysight_h5.md) | Esquema del formato Keysight en memoria segmentada (sensor `UHF_KS`) |
 | [archivos_md/LECTURA_KEYSIGHT_ENTREGA.md](archivos_md/LECTURA_KEYSIGHT_ENTREGA.md) | Lectura de bases de datos Keysight: decisiones, implementación y verificación |
+| [archivos_md/AUTOPLAY_ENTREGA.md](archivos_md/AUTOPLAY_ENTREGA.md) | Auto-play de la gráfica #2: navegación consciente del filtrado, control de velocidad, verificación |
 | `PROMPT_Analizador_Señales_UHF_AE.md` | Especificación maestra del proyecto |
 
 ## Desarrollo

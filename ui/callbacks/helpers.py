@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import Callable
 
+import numpy as np
+
 
 def parse_compare_indices(text: str | None, n_total: int, exclude: int | None = None) -> list[int]:
     """Parsea "450,451,452" a una lista de índices válidos (dentro de rango, sin
@@ -34,27 +36,110 @@ def clamp_index(index: int, n_total: int) -> int:
     return max(0, min(index, n_total - 1))
 
 
+AUTOPLAY_TRIGGER_ID = "autoplay-interval"
+
+# --- Auto-play: límites de velocidad -------------------------------------------------
+#
+# El techo NO lo pone el servidor: construir la gráfica #2 cuesta 3-5 ms en los tres
+# sensores (UHF 3.0 ms, AE 4.5 ms, UHF_KS 5.2 ms sobre datos reales, ver
+# archivos_md/AUTOPLAY_ENTREGA.md §3). Lo que manda es el repintado de Plotly en el
+# navegador más el ida y vuelta del callback. Si los ticks del ``dcc.Interval`` llegan
+# más rápido de lo que el navegador alcanza a dibujar, las peticiones se encolan: la
+# reproducción se ve a tirones y hasta el botón de pausa tarda en responder.
+#
+# Por eso la velocidad se ofrece como una lista cerrada de opciones medidas, y
+# ``autoplay_interval_ms`` satura por debajo -- ningún valor alcanzable produce
+# encolamiento.
+AUTOPLAY_MIN_INTERVAL_MS = 150
+AUTOPLAY_SPEED_OPTIONS_HZ: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0, 6.0)
+AUTOPLAY_DEFAULT_SPEED_HZ = 2.0
+
+
+def autoplay_interval_ms(speed_hz: float | None) -> int:
+    """Traduce velocidad (señales/s) al periodo del ``dcc.Interval``, en milisegundos.
+
+    Satura en :data:`AUTOPLAY_MIN_INTERVAL_MS`: es el guardarraíl que garantiza que
+    ninguna velocidad -- ni una inyectada fuera del selector -- pida al navegador más
+    cuadros de los que puede dibujar. Un valor nulo o no positivo cae al de por defecto
+    en vez de reventar o quedarse quieto.
+    """
+    if not speed_hz or speed_hz <= 0:
+        speed_hz = AUTOPLAY_DEFAULT_SPEED_HZ
+    return max(AUTOPLAY_MIN_INTERVAL_MS, int(round(1000.0 / speed_hz)))
+
+
+def step_to_adjacent_active(
+    current_index: int,
+    n_total: int,
+    direction: int,
+    active_indices: np.ndarray | None = None,
+    wrap: bool = False,
+) -> int:
+    """Índice de la señal **activa** inmediatamente anterior/siguiente a ``current_index``.
+
+    ``active_indices``: índices cronológicos globales no excluidos por el filtrado del
+    usuario, en orden ascendente (``np.where(mask)[0]``). Avanzar salta las señales
+    filtradas en vez de aterrizar en una que ninguna otra gráfica muestra -- el mismo
+    criterio con el que las gráficas #1 y #3 dibujan solo lo activo.
+
+    ``wrap=True`` (auto-play): al pasar del último activo vuelve al primero, cerrando el
+    bucle. ``wrap=False`` (botones Anterior/Siguiente): se queda en el extremo, que es el
+    comportamiento que esos botones ya tenían.
+
+    Sin ``active_indices`` (o con todo excluido) degrada al paso simple de ±1 acotado:
+    no hay información de filtrado que respetar, y quedarse inmóvil sería peor que
+    moverse.
+    """
+    if n_total <= 0:
+        return 0
+    if active_indices is None or active_indices.shape[0] == 0:
+        return clamp_index(current_index + direction, n_total)
+
+    if direction >= 0:
+        pos = int(np.searchsorted(active_indices, current_index, side="right"))
+        if pos < active_indices.shape[0]:
+            return int(active_indices[pos])
+        return int(active_indices[0]) if wrap else int(active_indices[-1])
+
+    pos = int(np.searchsorted(active_indices, current_index, side="left")) - 1
+    if pos >= 0:
+        return int(active_indices[pos])
+    return int(active_indices[-1]) if wrap else int(active_indices[0])
+
+
 def resolve_nav_index(
     triggered_id: str | None,
     nav_index_value: int | None,
     current_index: int,
     n_total: int,
     click_target_index: int | None = None,
+    active_indices: np.ndarray | None = None,
 ) -> int:
     """Resuelve el nuevo índice activo según qué disparó el callback de navegación.
 
-    - ``btn-prev``/``btn-next``: +-1 sobre el índice **actual conocido por el estado**
-      (no sobre lo que hubiera en el campo numérico, que podría estar a medio escribir).
-    - ``nav-index``: usa el valor tecleado directamente.
+    - ``btn-prev``/``btn-next``: al activo anterior/siguiente sobre el índice **actual
+      conocido por el estado** (no sobre lo que hubiera en el campo numérico, que podría
+      estar a medio escribir). Se detienen en los extremos.
+    - ``autoplay-interval``: igual que ``btn-next`` pero en bucle -- del último activo
+      vuelve al primero.
+    - ``nav-index``: usa el valor tecleado directamente, **sin** saltar a un activo:
+      teclear un índice es una petición explícita de ver esa señal concreta, incluso si
+      está excluida del análisis.
     - clic en gráfica #1 o #3: usa ``click_target_index`` (ya resuelto por
-      ``AppState.nearest_index_for_timestamp``).
+      ``AppState.nearest_index_for_timestamp``). Esas gráficas solo dibujan señales
+      activas, así que el objetivo ya viene filtrado por construcción.
     - cualquier otro disparo (carga inicial): mantiene el índice actual.
+
+    ``active_indices``: ver :func:`step_to_adjacent_active`.
     """
     if triggered_id == "btn-prev":
-        target = current_index - 1
-    elif triggered_id == "btn-next":
-        target = current_index + 1
-    elif triggered_id == "nav-index":
+        return step_to_adjacent_active(current_index, n_total, -1, active_indices, wrap=False)
+    if triggered_id == "btn-next":
+        return step_to_adjacent_active(current_index, n_total, +1, active_indices, wrap=False)
+    if triggered_id == AUTOPLAY_TRIGGER_ID:
+        return step_to_adjacent_active(current_index, n_total, +1, active_indices, wrap=True)
+
+    if triggered_id == "nav-index":
         target = nav_index_value if nav_index_value is not None else current_index
     elif triggered_id in ("graph-timeseries", "graph-metric") and click_target_index is not None:
         target = click_target_index

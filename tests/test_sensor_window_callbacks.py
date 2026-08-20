@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from dash.exceptions import PreventUpdate
 
 import ui.callbacks.sensor_window_callbacks as swc
 from cache.service import get_or_compute_puntual
@@ -460,3 +461,99 @@ def test_decorations_callback_patches_reference_line_from_registry(app_and_state
     ref_shapes = [s for s in shapes_op["params"]["value"] if s["xref"] == "paper"]
     assert len(ref_shapes) == 1
     assert ref_shapes[0]["y0"] == pytest.approx(expected)
+
+
+# --- Auto-play (rama auto-play) ----------------------------------------------------
+
+
+def _autoplay_toggle_key(dash_app) -> str:
+    for k in dash_app.callback_map:
+        if "autoplay-interval.disabled" in k:
+            return k
+    raise AssertionError("no se encontró el callback de conmutación de auto-play")
+
+
+def _autoplay_speed_key(dash_app) -> str:
+    for k in dash_app.callback_map:
+        if "autoplay-interval.interval" in k:
+            return k
+    raise AssertionError("no se encontró el callback de velocidad de auto-play")
+
+
+def test_autoplay_toggle_starts_and_stops_the_interval(app_and_state):
+    dash_app, _ = app_and_state
+    fn = _wrapped(dash_app, _autoplay_toggle_key(dash_app))
+
+    # Arranca deshabilitado (no hay ticks hasta pulsar): primer clic -> reproduciendo.
+    disabled, label, class_name = fn(1, True)
+    assert disabled is False
+    assert label == "⏸ Pausar"
+    assert "playing" in class_name
+
+    # Segundo clic -> pausa, y el botón vuelve a ofrecer reproducir.
+    disabled, label, class_name = fn(2, False)
+    assert disabled is True
+    assert label == "▶ Auto-play"
+    assert "playing" not in class_name
+
+
+def test_autoplay_speed_sets_interval_and_label(app_and_state):
+    dash_app, _ = app_and_state
+    fn = _wrapped(dash_app, _autoplay_speed_key(dash_app))
+
+    interval_ms, label = fn(2.0)
+    assert interval_ms == 500
+    assert label == "2.0 señales/s"
+
+    # Velocidad fuera del selector: satura en el suelo seguro, no encola peticiones.
+    interval_ms, _label = fn(1000.0)
+    assert interval_ms == swc.autoplay_interval_ms(1000.0)
+
+
+def _call_navigate(dash_app, state, monkeypatch, triggered_id, nav_value=None, sensor="UHF"):
+    """Invoca ``_on_navigate`` simulando el contexto de Dash (``ctx.triggered_id``),
+    que fuera de un dispatch HTTP real no existe."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id=triggered_id, triggered=[{"value": None}]))
+    fn = _wrapped(dash_app, "nav-index.value")
+    return fn(None, None, nav_value, None, [], state.dataset_version, 1, sensor)
+
+
+def test_autoplay_tick_advances_to_the_next_signal(app_and_state, monkeypatch):
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+    assert _call_navigate(dash_app, state, monkeypatch, "autoplay-interval") == 1
+
+
+def test_autoplay_tick_wraps_around_at_the_end(app_and_state, monkeypatch):
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 3)  # última de las 4 señales UHF del fixture
+    assert _call_navigate(dash_app, state, monkeypatch, "autoplay-interval") == 0
+
+
+def test_autoplay_tick_skips_filtered_signals(app_and_state, monkeypatch):
+    dash_app, state = app_and_state
+    state.apply_filter("UHF", np.array([1, 2]))  # deja activas la 0 y la 3
+    state.set_active_index("UHF", 0)
+    assert _call_navigate(dash_app, state, monkeypatch, "autoplay-interval") == 3
+    state.set_active_index("UHF", 3)
+    assert _call_navigate(dash_app, state, monkeypatch, "autoplay-interval") == 0
+
+
+def test_next_button_also_skips_filtered_signals(app_and_state, monkeypatch):
+    dash_app, state = app_and_state
+    state.apply_filter("UHF", np.array([1, 2]))
+    state.set_active_index("UHF", 0)
+    assert _call_navigate(dash_app, state, monkeypatch, "btn-next") == 3
+    # A diferencia del auto-play, el botón manual se queda en el extremo.
+    state.set_active_index("UHF", 3)
+    assert _call_navigate(dash_app, state, monkeypatch, "btn-next") == 3
+
+
+def test_autoplay_tick_with_a_single_active_signal_prevents_update(app_and_state, monkeypatch):
+    dash_app, state = app_and_state
+    state.apply_filter("UHF", np.array([0, 1, 2]))  # solo queda activa la 3
+    state.set_active_index("UHF", 3)
+    with pytest.raises(PreventUpdate):
+        _call_navigate(dash_app, state, monkeypatch, "autoplay-interval")

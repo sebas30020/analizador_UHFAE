@@ -18,7 +18,13 @@ from dash import dcc, html
 
 from core.models import SensorName
 from ui.callbacks.filtering import format_filter_status
-from ui.callbacks.helpers import VALID_SENSORS, resolve_sensor_availability_notice
+from ui.callbacks.helpers import (
+    AUTOPLAY_DEFAULT_SPEED_HZ,
+    AUTOPLAY_SPEED_OPTIONS_HZ,
+    VALID_SENSORS,
+    autoplay_interval_ms,
+    resolve_sensor_availability_notice,
+)
 from ui.components.control_panel import build_control_panel
 from ui.components.metadata_panel import build_metadata_panel
 from ui.state import get_state
@@ -84,6 +90,38 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
                             html.Button("◀ Anterior", id="btn-prev", n_clicks=0),
                             dcc.Input(id="nav-index", type="number", value=0, min=0, step=1),
                             html.Button("Siguiente ▶", id="btn-next", n_clicks=0),
+
+                            # Auto-play: recorre las señales activas en bucle, como pulsar
+                            # "Siguiente" de forma sostenida. El Interval nace deshabilitado
+                            # (no hay ticks hasta que se pulsa el botón) y su periodo lo fija
+                            # el selector de velocidad -- ver ui/callbacks/helpers.py para por
+                            # qué las opciones son una lista cerrada y no un campo libre.
+                            html.Button("▶ Auto-play", id="btn-autoplay", n_clicks=0, className="btn-autoplay"),
+                            html.Div(
+                                className="autoplay-speed",
+                                children=[
+                                    html.Label("Velocidad", htmlFor="autoplay-speed"),
+                                    dcc.Slider(
+                                        id="autoplay-speed",
+                                        min=min(AUTOPLAY_SPEED_OPTIONS_HZ),
+                                        max=max(AUTOPLAY_SPEED_OPTIONS_HZ),
+                                        value=AUTOPLAY_DEFAULT_SPEED_HZ,
+                                        step=None,  # solo los valores marcados: velocidades medidas
+                                        marks={
+                                            v: {"label": (f"{v:g}"), "style": {"fontSize": "10px"}}
+                                            for v in AUTOPLAY_SPEED_OPTIONS_HZ
+                                        },
+                                        tooltip={"placement": "bottom"},
+                                    ),
+                                ],
+                            ),
+                            html.Span(id="autoplay-status", className="autoplay-status"),
+                            dcc.Interval(
+                                id="autoplay-interval",
+                                interval=autoplay_interval_ms(AUTOPLAY_DEFAULT_SPEED_HZ),
+                                disabled=True,
+                            ),
+
                             dcc.Input(id="compare-indices", type="text", placeholder="Comparar con índices (ej. 450,451)", style={"width": "260px"}),
                             dcc.Checklist(
                                 id="show-raw-signal",
