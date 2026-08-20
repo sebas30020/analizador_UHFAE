@@ -58,6 +58,16 @@ def decimate_signal_by_pixel(
     return bin_reduce_minmax(t, y, y, n_pixels)
 
 
+# Entradas que aporta cada señal a la traza de segmentos verticales: mínimo, máximo y
+# separador ``NaN``, en ese orden (ver :func:`build_vertical_segments`).
+#
+# Es **contractual**, no un detalle interno: la señal a la que pertenece el punto
+# ``pointNumber`` de un evento de Plotly sobre esa traza es ``pointNumber //
+# ENTRIES_PER_SEGMENT`` -- así resuelve el filtrado por lazo de la gráfica #1 qué señales
+# encerró el usuario (``ui/callbacks/filtering.py::resolve_timeseries_selection_indices``).
+ENTRIES_PER_SEGMENT = 3
+
+
 def build_vertical_segments(
     x: np.ndarray, y_min: np.ndarray, y_max: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -65,6 +75,10 @@ def build_vertical_segments(
     en un solo trace de Plotly (patrón estándar "OHLC sin cuerpo"), evitando crear miles
     de traces individuales que degradarían el render. El ``NaN`` es el separador que
     corta la línea entre segmentos (Plotly lo serializa como ``null``).
+
+    La posición de cada señal dentro del array resultante es fija y derivable en ambos
+    sentidos (``señal k`` ocupa ``3k``, ``3k+1`` y ``3k+2``), ver
+    :data:`ENTRIES_PER_SEGMENT`.
 
     Retorna arrays de numpy, no listas de Python: con decenas de miles de señales sin
     diezmar (gráfica #1 desde la Fase 7) una lista de objetos hace que la validación de

@@ -695,6 +695,32 @@ def test_lasso_selection_on_2d_map_feeds_the_existing_filter_pipeline(app_and_st
     assert state.get_active_mask("UHF")[_EXPECTED_SIGNAL_AT_POSITION_1] is np.False_
 
 
+def test_lasso_on_timeseries_selects_only_the_enclosed_signals(app_and_state, monkeypatch):
+    # Regresión del bug reportado en uso real: la selección sobre la gráfica #1 se
+    # resolvía por franja temporal, así que un lazo ancho excluía TODAS las señales de
+    # ese rango de X aunque solo encerrara algunas. Ahora se resuelve señal a señal.
+    #
+    # El fixture tiene 4 señales UHF con la global 1 inválida -> la envolvente dibuja
+    # las señales 0, 2 y 3, en ese orden. La posición 3 de la traza es el mínimo del
+    # SEGUNDO segmento, o sea la señal global 2.
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": None}]))
+    fn = _wrapped(dash_app, "pending-exclusion-indices.data")
+
+    selected = {"points": [{"curveNumber": 0, "pointNumber": 3, "x": 1.0, "y": 0.5}]}
+    assert fn(selected, [], [], "UHF", "by_time", 60.0) == [2]
+
+    # Un lazo que abarca los tres segmentos sí devuelve las tres señales.
+    selected_todo = {"points": [
+        {"curveNumber": 0, "pointNumber": 0},
+        {"curveNumber": 0, "pointNumber": 3},
+        {"curveNumber": 0, "pointNumber": 6},
+    ]}
+    assert fn(selected_todo, [], [], "UHF", "by_time", 60.0) == [0, 2, 3]
+
+
 def test_lasso_selection_on_3d_map_prevents_update(app_and_state, monkeypatch):
     # Decisión D2: el mapa 3D nunca alimenta el filtrado, aunque en la práctica Plotly
     # no dispare selectedData sobre una escena 3D -- este es el guardarraíl defensivo.

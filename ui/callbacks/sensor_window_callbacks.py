@@ -18,11 +18,10 @@ from core.normalization import normalize
 from metrics.registry import get_metric
 from ui.callbacks.filtering import (
     format_filter_status,
-    indices_in_time_range,
     resolve_group_selection_indices,
     resolve_map_selection_signal_indices,
     resolve_puntual_selection_indices,
-    resolve_timeseries_selection_range,
+    resolve_timeseries_selection_indices,
 )
 from ui.callbacks.helpers import (
     AUTOPLAY_TRIGGER_ID,
@@ -321,12 +320,13 @@ def register_callbacks(app: Dash) -> None:
         triggered = ctx.triggered_id
 
         if triggered == "graph-timeseries":
-            x_range = resolve_timeseries_selection_range(selected_timeseries)
-            if x_range is None:
-                return []
-            x0 = elapsed_minutes_to_unix_seconds(x_range[0], dataset.t0)
-            x1 = elapsed_minutes_to_unix_seconds(x_range[1], dataset.t0)
-            return indices_in_time_range(block.timestamps, x0, x1).tolist()
+            # Señal a señal, no por franja temporal: ``build_timeseries_figure`` dibuja
+            # las señales de ``valid_mask & active_mask`` en ese orden, y cada una ocupa
+            # ENTRIES_PER_SEGMENT entradas de la traza -- ver
+            # ``resolve_timeseries_selection_indices``.
+            points = (selected_timeseries or {}).get("points") or []
+            active_signal_indices = np.where(block.valid_mask & state.get_active_mask(sensor))[0]
+            return resolve_timeseries_selection_indices(points, active_signal_indices)
 
         if isinstance(triggered, dict) and triggered.get("type") == "graph-map":
             if triggered["index"] != "2d":

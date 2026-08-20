@@ -3,52 +3,72 @@ import numpy as np
 from core.grouping import Group
 from ui.callbacks.filtering import (
     format_filter_status,
-    indices_in_time_range,
     nearest_group_index,
     resolve_group_selection_indices,
     resolve_map_selection_signal_indices,
     resolve_puntual_selection_indices,
-    resolve_timeseries_selection_range,
+    resolve_timeseries_selection_indices,
 )
 
 
-# --- resolve_timeseries_selection_range (gráfica #1) -------------------------------
+# --- resolve_timeseries_selection_indices (gráfica #1) ------------------------------
+#
+# Cada señal ocupa 3 entradas de la traza (mínimo, máximo, separador NaN), así que la
+# señal del punto ``pointNumber`` es ``pointNumber // 3``. Las señales dibujadas son las
+# de ``valid_mask & active_mask``, en ese orden -- aquí, las globales 4, 9 y 11.
 
-def test_resolve_timeseries_selection_box_select_uses_range():
-    selected = {"points": [], "range": {"x": [3.0, 1.0], "y": [-1, 1]}}
-    assert resolve_timeseries_selection_range(selected) == (1.0, 3.0)
-
-
-def test_resolve_timeseries_selection_lasso_uses_bounding_box_of_lassopoints():
-    selected = {"points": [], "lassoPoints": {"x": [1.0, 2.5, 1.8], "y": [0, 1, 2]}}
-    assert resolve_timeseries_selection_range(selected) == (1.0, 2.5)
+_ACTIVE_SIGNALS = np.array([4, 9, 11])
 
 
-def test_resolve_timeseries_selection_empty_or_none_returns_none():
-    assert resolve_timeseries_selection_range(None) is None
-    assert resolve_timeseries_selection_range({}) is None
-    assert resolve_timeseries_selection_range({"points": []}) is None
+def _envelope_point(position: int) -> dict:
+    return {"curveNumber": 0, "pointNumber": position, "x": 1.0, "y": 0.5}
 
 
-def test_resolve_timeseries_selection_prefers_range_over_lassopoints_when_both_present():
-    # No debería ocurrir en la práctica (son mutuamente excluyentes en selectedData de
-    # Plotly), pero fija el comportamiento: range.x tiene prioridad si ambos existen.
-    selected = {"range": {"x": [1.0, 2.0]}, "lassoPoints": {"x": [10.0, 20.0]}}
-    assert resolve_timeseries_selection_range(selected) == (1.0, 2.0)
+def test_timeseries_selection_maps_segment_position_to_signal():
+    # Posiciones 0 (mínimo de la señal 4) y 3 (mínimo de la señal 9).
+    assert resolve_timeseries_selection_indices(
+        [_envelope_point(0), _envelope_point(3)], _ACTIVE_SIGNALS
+    ) == [4, 9]
 
 
-# --- indices_in_time_range -----------------------------------------------------------
+def test_timeseries_selection_min_and_max_of_same_signal_yield_one_index():
+    # Un lazo que encierra el segmento completo captura sus dos extremos (3k y 3k+1):
+    # es UNA señal, no dos.
+    assert resolve_timeseries_selection_indices(
+        [_envelope_point(3), _envelope_point(4)], _ACTIVE_SIGNALS
+    ) == [9]
 
-def test_indices_in_time_range_inclusive_bounds():
-    timestamps = np.array([0.5, 1.0, 1.5, 3.0, 4.0])
-    result = indices_in_time_range(timestamps, 1.0, 3.0)
-    assert list(result) == [1, 2, 3]
+
+def test_timeseries_selection_only_max_endpoint_still_selects_the_signal():
+    # Lazo alto que solo alcanza los máximos: la señal igual queda seleccionada.
+    assert resolve_timeseries_selection_indices([_envelope_point(7)], _ACTIVE_SIGNALS) == [11]
 
 
-def test_indices_in_time_range_no_match_returns_empty():
-    timestamps = np.array([0.5, 1.0])
-    result = indices_in_time_range(timestamps, 10.0, 20.0)
-    assert result.shape[0] == 0
+def test_timeseries_selection_ignores_environmental_traces():
+    # Temperatura/humedad son curveNumber 1 y 2 y NO son señales -- un lazo que las roce
+    # no debe excluir señales por una correspondencia de índices sin significado.
+    points = [
+        {"curveNumber": 1, "pointNumber": 0},
+        {"curveNumber": 2, "pointNumber": 1},
+        _envelope_point(0),
+    ]
+    assert resolve_timeseries_selection_indices(points, _ACTIVE_SIGNALS) == [4]
+
+
+def test_timeseries_selection_out_of_range_position_is_skipped():
+    assert resolve_timeseries_selection_indices([_envelope_point(999)], _ACTIVE_SIGNALS) == []
+
+
+def test_timeseries_selection_empty_returns_empty():
+    assert resolve_timeseries_selection_indices([], _ACTIVE_SIGNALS) == []
+    assert resolve_timeseries_selection_indices(None, _ACTIVE_SIGNALS) == []
+
+
+def test_timeseries_selection_respects_amplitude_not_just_time_span():
+    # Regresión del bug reportado: un lazo ancho en tiempo pero que solo encierra
+    # algunos segmentos NO debe excluir todo lo que cae en esa franja temporal. Aquí el
+    # usuario encerró solo la señal 9, aunque 4 y 11 estén dentro del mismo rango de X.
+    assert resolve_timeseries_selection_indices([_envelope_point(3)], _ACTIVE_SIGNALS) == [9]
 
 
 # --- nearest_group_index --------------------------------------------------------------
