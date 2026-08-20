@@ -517,7 +517,219 @@ def _call_navigate(dash_app, state, monkeypatch, triggered_id, nav_value=None, s
 
     monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id=triggered_id, triggered=[{"value": None}]))
     fn = _wrapped(dash_app, "nav-index.value")
-    return fn(None, None, nav_value, None, [], state.dataset_version, 1, sensor)
+    return fn(None, None, nav_value, None, [], [], state.dataset_version, 1, sensor)
+
+
+def _enable_2d_map(dash_app, state, monkeypatch, x_metric="vmax", y_metric="rms"):
+    """Monta el mapa 2D vía ``_on_refresh_maps`` -- es lo que llena el registro
+    (``ui/map_registry.py``) del que dependen el click y el lazo para traducir la
+    posición de un punto a un índice de señal."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id=None, triggered=[{"value": None}]))
+    refresh_maps = _wrapped(dash_app, "maps-container.children")
+    refresh_maps(
+        ["show"], x_metric, y_metric,
+        [], None, None, None,
+        state.dataset_version, state.filter_version, "UHF", 0,
+    )
+
+
+def _map_event_ctx(monkeypatch, index, payload):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id={"type": "graph-map", "index": index}, triggered=[{"value": payload}]),
+    )
+
+
+# El fixture synthetic_hdf5 tiene 4 señales UHF ordenadas cronológicamente, con la de
+# índice global 1 inválida (vrange=0) -- así que el mapa dibuja las señales 0, 2 y 3, y
+# la posición 1 dentro de la traza corresponde a la señal global 2. Que estos dos
+# números NO coincidan es justamente lo que hace válida la prueba.
+_EXPECTED_SIGNAL_AT_POSITION_1 = 2
+
+
+def test_click_on_map_navigates_to_signal_by_point_position(app_and_state, monkeypatch):
+    # Payload con la forma REAL que Dash entrega desde el navegador: curveNumber y
+    # pointNumber, SIN customdata (ver ui/components/graph_map_common.py). Antes esta
+    # prueba usaba customdata y pasaba, pero el click no funcionaba en la app real.
+    dash_app, state = app_and_state
+    _enable_2d_map(dash_app, state, monkeypatch)
+    state.set_active_index("UHF", 0)
+
+    click_data = {"points": [{"curveNumber": 0, "pointNumber": 1, "x": 0.1, "y": 0.2}]}
+    _map_event_ctx(monkeypatch, "2d", click_data)
+    fn = _wrapped(dash_app, "nav-index.value")
+    result = fn(None, None, None, None, [], [click_data], state.dataset_version, 1, "UHF")
+    assert result == _EXPECTED_SIGNAL_AT_POSITION_1
+
+
+def test_click_on_map_highlight_trace_prevents_update(app_and_state, monkeypatch):
+    # curveNumber=1 es la traza de resaltado -- clicar sobre la propia señal ya
+    # seleccionada no debe hacer nada (ni error, ni navegación).
+    dash_app, state = app_and_state
+    _enable_2d_map(dash_app, state, monkeypatch)
+
+    click_data = {"points": [{"curveNumber": 1, "pointNumber": 0, "x": 0.1, "y": 0.2}]}
+    _map_event_ctx(monkeypatch, "2d", click_data)
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, None, [], [click_data], state.dataset_version, 1, "UHF")
+
+
+def test_click_on_map_without_registry_entry_prevents_update(app_and_state, monkeypatch):
+    # Mapa deshabilitado (registro vacío): un evento en vuelo no debe reventar.
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id=None, triggered=[{"value": None}]))
+    _wrapped(dash_app, "maps-container.children")(
+        [], None, None, [], None, None, None,
+        state.dataset_version, state.filter_version, "UHF", 0,
+    )
+
+    click_data = {"points": [{"curveNumber": 0, "pointNumber": 0}]}
+    _map_event_ctx(monkeypatch, "2d", click_data)
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, None, [], [click_data], state.dataset_version, 1, "UHF")
+
+
+def _map_highlight_key(dash_app) -> str:
+    for k in dash_app.callback_map:
+        if "graph-map" in k and "figure" in k:
+            return k
+    raise AssertionError("no se encontró el callback de resaltado de los mapas")
+
+
+def test_map_highlight_patch_moves_highlight_trace_without_recomputing(app_and_state, monkeypatch):
+    # Habilita el mapa 2D (vmax/rms) vía _on_refresh_maps -- esto llena el registro
+    # (ui/map_registry.py) que _on_refresh_map_highlight necesita para no recalcular.
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id=None, triggered=[{"value": None}]))
+    refresh_maps = _wrapped(dash_app, "maps-container.children")
+    refresh_maps(
+        ["show"], "vmax", "rms",
+        [], None, None, None,
+        state.dataset_version, state.filter_version, "UHF", 0,
+    )
+
+    highlight_fn = _wrapped(dash_app, _map_highlight_key(dash_app))
+    map_ids = [{"index": "2d", "type": "graph-map"}]
+    # Señal 2: tras el ordenamiento cronológico del fixture (ingest_sensor ordena por
+    # timestamp explícitamente), el índice global 1 corresponde a la señal con
+    # vrange=0 (inválida, excluida del mapa) -- 2 sí es una señal válida presente.
+    patches = highlight_fn(2, map_ids)
+    assert len(patches) == 1
+
+    ops = {op["location"][-1]: op["params"]["value"] for op in patches[0].to_plotly_json()["operations"]}
+    # Un solo punto por eje, sin volver a pasar por build_map_dataset.
+    assert len(ops["x"]) == 1 and len(ops["y"]) == 1
+
+
+def test_map_highlight_patch_empty_when_no_map_enabled(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id=None, triggered=[{"value": None}]))
+    refresh_maps = _wrapped(dash_app, "maps-container.children")
+    refresh_maps(
+        [], None, None,   # mapa 2D deshabilitado
+        [], None, None, None,
+        state.dataset_version, state.filter_version, "UHF", 0,
+    )
+
+    highlight_fn = _wrapped(dash_app, _map_highlight_key(dash_app))
+    # Sin mapas montados, {"type": "graph-map", "index": ALL} degrada a lista vacía.
+    with pytest.raises(PreventUpdate):
+        highlight_fn(1, [])
+
+
+# --- Lazo/caja en el mapa 2D -> filtrado (archivos_md/prompt-mapas2d3d.md §5.4) ------
+
+
+def test_lasso_selection_on_2d_map_returns_signal_indices_by_position(app_and_state, monkeypatch):
+    # Mismo Store "pending-exclusion-indices" que ya alimentan #1/#3. Payload real del
+    # navegador: curveNumber/pointNumber, sin customdata.
+    dash_app, state = app_and_state
+    _enable_2d_map(dash_app, state, monkeypatch)
+
+    selected_data = {"points": [
+        {"curveNumber": 0, "pointNumber": 0, "x": 0.1, "y": 0.2},
+        {"curveNumber": 0, "pointNumber": 1, "x": 0.3, "y": 0.4},
+    ]}
+    _map_event_ctx(monkeypatch, "2d", selected_data)
+    fn = _wrapped(dash_app, "pending-exclusion-indices.data")
+    result = fn(None, [], [selected_data], "UHF", "by_time", 60.0)
+    # Posiciones 0 y 1 de la traza -> señales globales 0 y 2 (la 1 es inválida).
+    assert result == [0, _EXPECTED_SIGNAL_AT_POSITION_1]
+
+
+def test_lasso_selection_on_2d_map_feeds_the_existing_filter_pipeline(app_and_state, monkeypatch):
+    # De extremo a extremo: el lazo deja la selección pendiente y "Filtrar selección"
+    # (el botón que ya existía para #1/#3) la aplica sobre AppState -- sin filtro
+    # paralelo (§4 del prompt).
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    _enable_2d_map(dash_app, state, monkeypatch)
+
+    selected_data = {"points": [{"curveNumber": 0, "pointNumber": 1, "x": 0.3, "y": 0.4}]}
+    _map_event_ctx(monkeypatch, "2d", selected_data)
+    pending = _wrapped(dash_app, "pending-exclusion-indices.data")(
+        None, [], [selected_data], "UHF", "by_time", 60.0
+    )
+    assert pending == [_EXPECTED_SIGNAL_AT_POSITION_1]
+
+    activas_antes, _totales, _ops = state.get_filter_counts("UHF")
+    monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id="btn-apply-filter", triggered=[{"value": None}]))
+    _wrapped(dash_app, "filter-version.data")(1, None, None, None, pending, "UHF")
+
+    activas_despues, _totales, n_ops = state.get_filter_counts("UHF")
+    assert activas_despues == activas_antes - 1
+    assert n_ops == 1
+    assert state.get_active_mask("UHF")[_EXPECTED_SIGNAL_AT_POSITION_1] is np.False_
+
+
+def test_lasso_on_timeseries_selects_only_the_enclosed_signals(app_and_state, monkeypatch):
+    # Regresión del bug reportado en uso real: la selección sobre la gráfica #1 se
+    # resolvía por franja temporal, así que un lazo ancho excluía TODAS las señales de
+    # ese rango de X aunque solo encerrara algunas. Ahora se resuelve señal a señal.
+    #
+    # El fixture tiene 4 señales UHF con la global 1 inválida -> la envolvente dibuja
+    # las señales 0, 2 y 3, en ese orden. La posición 3 de la traza es el mínimo del
+    # SEGUNDO segmento, o sea la señal global 2.
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": None}]))
+    fn = _wrapped(dash_app, "pending-exclusion-indices.data")
+
+    selected = {"points": [{"curveNumber": 0, "pointNumber": 3, "x": 1.0, "y": 0.5}]}
+    assert fn(selected, [], [], "UHF", "by_time", 60.0) == [2]
+
+    # Un lazo que abarca los tres segmentos sí devuelve las tres señales.
+    selected_todo = {"points": [
+        {"curveNumber": 0, "pointNumber": 0},
+        {"curveNumber": 0, "pointNumber": 3},
+        {"curveNumber": 0, "pointNumber": 6},
+    ]}
+    assert fn(selected_todo, [], [], "UHF", "by_time", 60.0) == [0, 2, 3]
+
+
+def test_lasso_selection_on_3d_map_prevents_update(app_and_state, monkeypatch):
+    # Decisión D2: el mapa 3D nunca alimenta el filtrado, aunque en la práctica Plotly
+    # no dispare selectedData sobre una escena 3D -- este es el guardarraíl defensivo.
+    dash_app, _ = app_and_state
+    selected_data = {"points": [{"curveNumber": 0, "pointNumber": 0}]}
+    _map_event_ctx(monkeypatch, "3d", selected_data)
+    fn = _wrapped(dash_app, "pending-exclusion-indices.data")
+    with pytest.raises(PreventUpdate):
+        fn(None, [], [selected_data], "UHF", "by_time", 60.0)
 
 
 def test_autoplay_tick_advances_to_the_next_signal(app_and_state, monkeypatch):

@@ -293,3 +293,33 @@ Los benchmarks de la línea de referencia están en el mismo `run_benchmarks.py`
 "Línea de referencia horizontal" del código — reutilizan las series ya cacheadas por
 los pasos 3-4 (`rms`, `feq`, `tasa_pulsos`) en vez de recalcular nada, siguiendo la
 misma disciplina de no introducir trabajo nuevo solo para medir.
+
+## 8. Mapas de separación (gráficas #4 y #5)
+
+Medido sobre `med_5_ago_3.hdf5`, sensor UHF, 12 484 señales; ejes Vmax × RMS (2D) y
+Vmax × RMS × Vpp (3D). Tabla completa en
+[../archivos_md/benchmarks_baseline/mapas_2d_3d.md](../archivos_md/benchmarks_baseline/mapas_2d_3d.md).
+
+| Operación | Sensor | Mediana | Objetivo | Veredicto |
+|---|---|---:|---:|---|
+| `build_map_dataset` 2D (caché caliente) | UHF | 30 ms | < 200 ms | CUMPLE |
+| `build_map_dataset` 3D (caché caliente) | UHF | 52 ms | < 200 ms | CUMPLE |
+| `build_map_dataset` 2D con filtro activo (6 242 puntos) | UHF | 25 ms | < 200 ms | CUMPLE |
+| Render mapa 2D (`Scattergl`, 12 484 puntos) | UHF | 15 ms | reportar | — |
+| Render mapa 3D (`Scatter3d`, 12 484 puntos) | UHF | 32 ms | reportar | — |
+| Resaltado al navegar (`resolve_map_highlight_coords`) | UHF | 0.035 ms | < 50 ms | CUMPLE |
+
+El caché frío (865 ms para los dos ejes del 2D) es el costo de calcular las métricas —
+el mismo que ya paga una gráfica #3 la primera vez, no algo propio de los mapas — y se
+amortiza porque el resultado queda en el caché compartido: montar el mapa 3D reutilizando
+dos ejes ya calculados solo paga el eje nuevo (469 ms).
+
+Los 0,035 ms del resaltado son la razón de que navegar entre señales use un `dash.Patch`
+sobre una traza dedicada en vez de reconstruir el mapa: rehacerlo costaría ~45 ms
+(dataset + figura) en **cada** "Siguiente" o tick de auto-play, con los dos mapas
+abiertos. Misma disciplina que la línea de referencia del §7: lo que solo cambia la
+presentación se parchea, no se recalcula.
+
+No hizo falta diezmar: 12 484 puntos en `Scattergl` y `Scatter3d` van sobrados. Si un
+dataset bastante mayor lo pidiera, el punto de intervención es `viz/maps.py`, no los
+componentes de figura.

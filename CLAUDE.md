@@ -63,6 +63,13 @@ ruidosamente. `docs/ARQUITECTURA.md` explica el porqué de cada una.
 - **Una sola máscara de filtrado por sensor.** UHF y AE nunca la comparten.
 - **Los callbacks de Dash se registran una sola vez** y resuelven el sensor en tiempo de
   render leyendo el Store `page-sensor`. No montes dos layouts a la vez.
+- **Para saber a qué señal corresponde un punto de una gráfica, usa su posición
+  (`curveNumber` + `pointNumber`), nunca `customdata`.** Con plotly.py 6.x el
+  `customdata` **no llega al servidor** (typed array en base64 que el `filterEventData` de
+  `dcc.Graph` no sabe indexar), pero el tooltip sí lo muestra: la funcionalidad aparenta
+  estar bien mientras los callbacks no hacen nada. Y ojo con probarlo: un payload de test
+  escrito a mano con `customdata` pasa sin que la app funcione. Ver `docs/ARQUITECTURA.md`
+  §9 y `archivos_md/MAPAS_2D_3D_ENTREGA.md` §3.
 - **`T_w` en métricas de grupo intrínsecas es la duración declarada de la ventana**, jamás
   inferida de los timestamps observados.
 

@@ -10,33 +10,63 @@ from __future__ import annotations
 import numpy as np
 
 from core.grouping import Group
+from ui.callbacks.helpers import resolve_map_point_signal_index
 from ui.components.time_axis import elapsed_minutes_to_unix_seconds
+from viz.decimation import ENTRIES_PER_SEGMENT
 
 
-def resolve_timeseries_selection_range(selected_data: dict | None) -> tuple[float, float] | None:
-    """Extrae el rango de X (minutos transcurridos) de una selección en la gráfica #1.
+# La envolvente es la PRIMERA traza de la gráfica #1 (``ui/components/graph_timeseries.py``);
+# las de temperatura y humedad van después, sobre el eje secundario. Filtrar por
+# ``curveNumber`` evita que un lazo que roce las series ambientales -- que no son señales --
+# acabe excluyendo señales por una correspondencia de índices que no significa nada.
+TIMESERIES_ENVELOPE_CURVE = 0
 
-    La gráfica #1 se resuelve SIEMPRE por rango de tiempo, nunca por punto individual:
-    aunque desde la Fase 7 la envolvente se dibuja sin diezmar (1 segmento = 1 señal
-    real), cada señal aporta TRES entradas a la traza (min, max y el separador ``None``
-    de ``build_vertical_segments``), así que el índice de punto de Plotly tampoco es el
-    índice de señal. Selección rectangular trae ``range.x``; lazo trae ``lassoPoints.x``
-    (los vértices del polígono, sin bounding-box precalculado) -- se usa su min/max.
+
+def resolve_timeseries_selection_indices(
+    selected_points: list[dict] | None, active_signal_indices: np.ndarray
+) -> list[int]:
+    """Índices globales de señal encerrados con lazo/caja en la gráfica #1.
+
+    Resuelve **señal a señal**, respetando también la amplitud: cada señal se dibuja
+    como un segmento vertical de tres entradas (mínimo, máximo, separador ``NaN``, ver
+    :func:`viz.decimation.build_vertical_segments`), así que la señal del punto
+    ``pointNumber`` es ``pointNumber // ENTRIES_PER_SEGMENT``, y de ahí a índice global
+    a través de ``active_signal_indices`` (las señales que esa figura realmente dibujó,
+    ``valid_mask & active_mask``, en el mismo orden).
+
+    Sustituye a la resolución por rango de tiempo que existía hasta la rama de los mapas.
+    Aquella colapsaba cualquier selección a ``[min(x), max(x)]`` y excluía **todas** las
+    señales de esa franja temporal, ignorando por completo lo que el lazo encerraba en
+    vertical: con un lazo alto y estrecho el resultado era el correcto por casualidad,
+    pero con uno ancho excluía señales que el usuario nunca encerró. Que la gráfica #1
+    dibuje segmentos en vez de puntos sueltos no impide resolver por señal -- solo exige
+    dividir por el número de entradas que aporta cada una.
+
+    Un lazo que cruce el centro de un segmento sin contener ninguno de sus dos extremos
+    no selecciona esa señal: Plotly solo conoce los vértices que dibuja. Es coherente con
+    lo que se ve en pantalla (los extremos llevan marcador, ``mode="lines+markers"``) y
+    es preferible a la alternativa anterior, que excluía de más sin avisar.
     """
-    if not selected_data:
-        return None
-    x_range = (selected_data.get("range") or {}).get("x")
-    if x_range:
-        return float(min(x_range)), float(max(x_range))
-    lasso_x = (selected_data.get("lassoPoints") or {}).get("x")
-    if lasso_x:
-        return float(min(lasso_x)), float(max(lasso_x))
-    return None
-
-
-def indices_in_time_range(timestamps: np.ndarray, x0: float, x1: float) -> np.ndarray:
-    """Índices crudos (posición en ``block.timestamps``) cuyo timestamp cae en ``[x0, x1]``."""
-    return np.where((timestamps >= x0) & (timestamps <= x1))[0]
+    if not selected_points:
+        return []
+    seen: set[int] = set()
+    result: list[int] = []
+    for point in selected_points:
+        if point.get("curveNumber") != TIMESERIES_ENVELOPE_CURVE:
+            continue
+        position = point.get("pointNumber")
+        if position is None:
+            position = point.get("pointIndex")
+        if position is None:
+            continue
+        segment = int(position) // ENTRIES_PER_SEGMENT
+        if segment < 0 or segment >= active_signal_indices.shape[0]:
+            continue
+        idx = int(active_signal_indices[segment])
+        if idx not in seen:
+            seen.add(idx)
+            result.append(idx)
+    return result
 
 
 def nearest_group_index(center_timestamps: np.ndarray, timestamp: float) -> int:
@@ -78,6 +108,33 @@ def format_filter_status(active: int, total: int, n_ops: int) -> str:
     """Texto del indicador permanente de filtrado (PROMPT §7.2: "número de señales
     activas/totales, y número de filtros aplicados")."""
     return f"{active}/{total} señales activas · {n_ops} filtro(s) aplicado(s)"
+
+
+def resolve_map_selection_signal_indices(
+    selected_points: list[dict] | None, signal_indices: np.ndarray
+) -> list[int]:
+    """Índices globales de señal seleccionados con lazo/caja en el mapa 2D (#4,
+    ``archivos_md/prompt-mapas2d3d.md`` §5.4).
+
+    Cada punto se resuelve por posición contra ``signal_indices`` del ``MapDataset`` con
+    el que se dibujó el mapa (:func:`ui.callbacks.helpers.resolve_map_point_signal_index`),
+    no por ``customdata`` ni por cercanía de timestamp como #1/#3: un punto del mapa ya
+    ES una señal. El porqué de no usar ``customdata`` está en
+    ``ui/components/graph_map_common.py``.
+
+    Los puntos de la traza de resaltado que caigan dentro del lazo se descartan sin
+    perder nada: esa misma señal ya viene en la traza de puntos.
+    """
+    if not selected_points:
+        return []
+    seen: set[int] = set()
+    result: list[int] = []
+    for point in selected_points:
+        idx = resolve_map_point_signal_index(point, signal_indices)
+        if idx is not None and idx not in seen:
+            seen.add(idx)
+            result.append(idx)
+    return result
 
 
 def resolve_puntual_selection_indices(selected_points: list[dict], t0: float, nearest_index_fn) -> list[int]:

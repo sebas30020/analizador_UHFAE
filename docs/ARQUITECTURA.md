@@ -13,7 +13,7 @@ presentación no contiene lógica de cálculo.
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ PRESENTACIÓN            ui/app.py        ruteo y arranque            │
-│                         ui/components/   3 tipos de gráfica, paneles │
+│                         ui/components/   5 tipos de gráfica, paneles │
 │                         ui/callbacks/    envoltorios de Dash         │
 │                         ui/state.py      fuente única de verdad      │
 └───────────────────────────────┬──────────────────────────────────────┘
@@ -46,6 +46,7 @@ presentación no contiene lógica de cálculo.
                                        normalización, profiling
                 utils/profiling.py    tiempos por etapa (§9.3)
                 viz/decimation.py     diezmado min/max (gráfica #2)
+                viz/maps.py           ejes de los mapas #4/#5 (§6.1)
 ```
 
 ## 2. El modelo de datos canónico
@@ -126,6 +127,32 @@ Las gráficas son vistas derivadas; ninguna guarda su propio estado de filtrado.
 Dos contadores monotónicos (`dataset-version`, `filter-version`) actúan como señal de
 "hay que repintar": los callbacks de refresco los toman como `Input` en vez de inventar
 un mecanismo propio de notificación.
+
+### 6.1 Mapas de separación #4 (2D) y #5 (3D)
+
+Un punto = una señal, ubicada por dos o tres **métricas puntuales** cualesquiera. Solo el
+régimen puntual: es el único que produce un escalar por señal. `viz/maps.py` no calcula
+nada — pide cada eje a `cache/service.py::get_or_compute_puntual`, el mismo camino que
+las gráficas #3, así que un punto del mapa usa exactamente el valor que el usuario ya ve
+graficado en el tiempo.
+
+Los ejes quedan alineados **por construcción**, sin emparejar por timestamp:
+`get_or_compute_puntual` siempre consulta el caché sobre el conjunto completo y aplica
+`active_mask` como recorte posterior, así que el orden resultante es siempre
+`np.where(valid_mask & active_mask)[0]`. Ese mismo array es el índice global de señal de
+cada punto, y es lo que resuelve el clic, el tooltip y el lazo.
+
+`maps-container` es **hermano y posterior** a `metrics-graphs-container` en el layout: que
+los mapas queden siempre debajo de las métricas es una propiedad del árbol de
+componentes, no lógica de un callback.
+
+El resaltado de la señal activa se mueve con un `dash.Patch` sobre una traza dedicada
+(siempre la índice 1, vacía cuando no aplica), leyendo el `MapDataset` de un registro de
+proceso (`ui/map_registry.py`, mismo patrón que `ui/reference_registry.py`). Navegar entre
+señales no reconstruye la nube de puntos.
+
+El mapa 3D no alimenta el filtrado: Plotly no ofrece lazo ni caja de selección dentro de
+una escena `scene`. Sí responde al clic, igual que el 2D.
 
 ## 7. Diezmado: dónde sí y dónde no
 
@@ -223,3 +250,21 @@ esa clave.
   leen nunca.
 - **El estado es de proceso, no de pestaña.** Cargar un dataset nuevo no refresca las
   pestañas ya abiertas: se enteran al recargar.
+- **`customdata` NO llega al servidor. Identifica los puntos por posición.** plotly.py 6.x
+  serializa los arrays de numpy como *typed arrays* en base64 (`{"dtype", "bdata"}`) en
+  vez de listas, y el `filterEventData` de `dcc.Graph` reconstruye el `customdata` de cada
+  punto haciendo `gd.data[curveNumber].customdata[pointNumber]` — indexar ese objeto con
+  un entero da `undefined`, así que el punto llega **sin** `customdata`. El tooltip sí lo
+  muestra porque lo renderiza Plotly desde `_fullData`, ya decodificado, sin pasar por
+  Dash: la funcionalidad *parece* correcta mientras los callbacks no hacen nada. Fue un
+  bug real de los mapas #4/#5, encontrado en uso y no por las pruebas, que lo daban por
+  bueno con un payload inventado. Lo que sí sobrevive el filtro son los números planos del
+  evento (`curveNumber`, `pointNumber`, `x`, `y`, `z`), y por eso toda identificación de
+  punto se resuelve por posición contra el array con el que se dibujó la traza.
+- **Un punto de Plotly no siempre es una señal; la conversión es aritmética, no
+  imposible.** La gráfica #1 dibuja cada señal como un segmento vertical de tres entradas
+  (mínimo, máximo, separador `NaN`, `viz/decimation.py::ENTRIES_PER_SEGMENT`), así que la
+  señal del punto `pointNumber` es `pointNumber // 3`. Hasta la rama de los mapas el
+  filtrado por lazo de esa gráfica se resolvía por rango de tiempo justamente por dar esa
+  conversión por imposible, y el resultado era que la selección ignoraba la amplitud: un
+  lazo ancho excluía todas las señales de la franja, no las que el usuario encerró.

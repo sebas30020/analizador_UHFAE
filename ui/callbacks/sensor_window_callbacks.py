@@ -18,10 +18,10 @@ from core.normalization import normalize
 from metrics.registry import get_metric
 from ui.callbacks.filtering import (
     format_filter_status,
-    indices_in_time_range,
     resolve_group_selection_indices,
+    resolve_map_selection_signal_indices,
     resolve_puntual_selection_indices,
-    resolve_timeseries_selection_range,
+    resolve_timeseries_selection_indices,
 )
 from ui.callbacks.helpers import (
     AUTOPLAY_TRIGGER_ID,
@@ -29,19 +29,26 @@ from ui.callbacks.helpers import (
     clamp_index,
     decode_metric_option,
     parse_compare_indices,
+    resolve_map_axis_status,
+    resolve_map_click_signal_index,
     resolve_nav_index,
     resolve_reference_line_display,
     resolve_sensor_availability_notice,
 )
 from ui.components.event_lines import build_event_line_shapes
+from ui.components.graph_map_2d import build_map_2d_figure
+from ui.components.graph_map_3d import build_map_3d_figure
+from ui.components.graph_map_common import HIGHLIGHT_TRACE_INDEX, build_empty_map_figure
 from ui.components.graph_metric import build_metric_figure
 from ui.components.graph_signal import build_signal_figure
 from ui.components.graph_timeseries import build_timeseries_figure
 from ui.components.metadata_panel import build_metadata_panel
 from ui.components.reference_line import build_reference_annotation, build_reference_message_annotation, build_reference_shape
 from ui.components.time_axis import elapsed_minutes_to_unix_seconds, to_elapsed_minutes
+from ui.map_registry import get_map_registry
 from ui.reference_registry import get_reference_registry
 from ui.state import get_state
+from viz.maps import build_map_dataset, resolve_map_highlight_coords
 from viz.reference_line import build_prefix_sums
 from viz.reference_line import mean_until as compute_reference_mean
 from viz.smoothing import SmoothingSpec
@@ -83,6 +90,74 @@ def _open_file_dialog() -> str | None:
     return path or None
 
 
+# --- Mapas de separación #4/#5 (archivos_md/prompt-mapas2d3d.md, etapa 3) -----------
+#
+# Solo régimen puntual (decisión D3, archivos_md/PLAN_MAPAS_2D_3D.md): los selectores
+# de eje del panel de control (``ui/components/control_panel.py::
+# _puntual_metric_axis_options``) ya ofrecen únicamente ese catálogo, así que aquí el
+# valor del dropdown ES el ``metric_id`` directamente -- no pasa por
+# ``decode_metric_option`` como el selector múltiple de la gráfica #3.
+
+
+# Ids de patrón (mismo idioma que {"type": "graph-metric", "index": <opción>}): permiten
+# que el callback de resaltado ligero (_on_refresh_map_highlight) declare su Output como
+# {"type": "graph-map", "index": ALL} y degrade con normalidad a 0, 1 o 2 coincidencias
+# según qué mapas estén habilitados, sin que Dash se queje de un id inexistente
+# (suppress_callback_exceptions=True, ui/app.py, ya cubre esto -- mismo mecanismo que ya
+# usan las gráficas de métricas, que tampoco existen hasta que se selecciona alguna).
+MAP_2D_GRAPH_ID = {"type": "graph-map", "index": "2d"}
+MAP_3D_GRAPH_ID = {"type": "graph-map", "index": "3d"}
+
+
+def _render_map_2d_slot(cache, block, cfg, dataset, sensor, x_metric, y_metric, active_mask, selected_signal_index, registry):
+    all_assigned, has_duplicate = resolve_map_axis_status([x_metric, y_metric])
+    if not all_assigned:
+        registry.set("2d", None)
+        fig = build_empty_map_figure()
+        return html.Div(dcc.Graph(id=MAP_2D_GRAPH_ID, figure=fig), className="metrics-graph-slot")
+    try:
+        map_dataset = build_map_dataset(
+            cache, block, cfg, dataset.dataset_id, {"x": x_metric, "y": y_metric}, active_mask=active_mask,
+        )
+        registry.set("2d", map_dataset)
+        fig = build_map_2d_figure(
+            map_dataset, same_metric_warning=has_duplicate, selected_signal_index=selected_signal_index,
+            uirevision=f"{sensor}|{dataset.dataset_id}|map2d|{x_metric}|{y_metric}",
+        )
+        return html.Div(dcc.Graph(id=MAP_2D_GRAPH_ID, figure=fig), className="metrics-graph-slot")
+    except Exception as exc:
+        # Aislado del resto de la ventana, mismo criterio que el bucle de gráficas de
+        # métricas más abajo: un fallo en el mapa no debe tirar abajo las demás gráficas.
+        registry.set("2d", None)
+        _logger.exception("etapa=ui.map error=fallo_calculo sensor=%s mapa=2d x=%s y=%s", sensor, x_metric, y_metric)
+        return html.Div(f"No se pudo calcular el mapa 2D: {exc}", className="metrics-graph-slot metrics-graph-error")
+
+
+def _render_map_3d_slot(cache, block, cfg, dataset, sensor, x_metric, y_metric, z_metric, active_mask, selected_signal_index, registry):
+    all_assigned, has_duplicate = resolve_map_axis_status([x_metric, y_metric, z_metric])
+    if not all_assigned:
+        registry.set("3d", None)
+        fig = build_empty_map_figure()
+        return html.Div(dcc.Graph(id=MAP_3D_GRAPH_ID, figure=fig), className="metrics-graph-slot")
+    try:
+        map_dataset = build_map_dataset(
+            cache, block, cfg, dataset.dataset_id,
+            {"x": x_metric, "y": y_metric, "z": z_metric}, active_mask=active_mask,
+        )
+        registry.set("3d", map_dataset)
+        fig = build_map_3d_figure(
+            map_dataset, same_metric_warning=has_duplicate, selected_signal_index=selected_signal_index,
+            uirevision=f"{sensor}|{dataset.dataset_id}|map3d|{x_metric}|{y_metric}|{z_metric}",
+        )
+        return html.Div(dcc.Graph(id=MAP_3D_GRAPH_ID, figure=fig), className="metrics-graph-slot")
+    except Exception as exc:
+        registry.set("3d", None)
+        _logger.exception(
+            "etapa=ui.map error=fallo_calculo sensor=%s mapa=3d x=%s y=%s z=%s", sensor, x_metric, y_metric, z_metric
+        )
+        return html.Div(f"No se pudo calcular el mapa 3D: {exc}", className="metrics-graph-slot metrics-graph-error")
+
+
 def register_callbacks(app: Dash) -> None:
     """Registra todos los callbacks de la ventana de sensor **una sola vez** para todo
     el proceso Dash (Fase 5): UHF y AE ya no son instancias separadas del layout con
@@ -115,12 +190,16 @@ def register_callbacks(app: Dash) -> None:
         Input("nav-index", "value"),
         Input("graph-timeseries", "clickData"),
         Input({"type": "graph-metric", "index": ALL}, "clickData"),
+        Input({"type": "graph-map", "index": ALL}, "clickData"),
         Input("dataset-version", "data"),
         Input("autoplay-interval", "n_intervals"),
         State("page-sensor", "data"),
         prevent_initial_call=True,
     )
-    def _on_navigate(n_prev, n_next, nav_value, click_timeseries, click_metrics, dataset_version, n_intervals, sensor):
+    def _on_navigate(
+        n_prev, n_next, nav_value, click_timeseries, click_metrics, click_maps,
+        dataset_version, n_intervals, sensor,
+    ):
         state = get_state()
         dataset = state.dataset
         if dataset is None or sensor not in dataset.blocks:
@@ -131,11 +210,13 @@ def register_callbacks(app: Dash) -> None:
 
         current = state.get_active_index(sensor)
         triggered = ctx.triggered_id
-        # Cualquiera de las N gráficas apiladas tipo #3 puede disparar la navegación
-        # (id de patrón {"type": "graph-metric", "index": <opción>}) -- se normaliza a
-        # "graph-metric" para reusar la misma lógica pura que la gráfica #1.
+        # Cualquiera de las N gráficas apiladas tipo #3, o cualquiera de los mapas #4/#5,
+        # puede disparar la navegación (ids de patrón {"type": "graph-metric"/"graph-map",
+        # "index": ...}) -- se normalizan a "graph-metric"/"graph-map" para reusar la
+        # misma lógica pura que la gráfica #1.
         is_metric_click = isinstance(triggered, dict) and triggered.get("type") == "graph-metric"
-        triggered_kind = "graph-metric" if is_metric_click else triggered
+        is_map_click = isinstance(triggered, dict) and triggered.get("type") == "graph-map"
+        triggered_kind = "graph-metric" if is_metric_click else ("graph-map" if is_map_click else triggered)
 
         click_target = None
         if triggered_kind in ("graph-timeseries", "graph-metric"):
@@ -147,6 +228,19 @@ def register_callbacks(app: Dash) -> None:
             # no timestamp UNIX -- hay que reconvertir el clic antes de buscar el índice.
             clicked_unix = elapsed_minutes_to_unix_seconds(float(points[0]["x"]), dataset.t0)
             click_target = state.nearest_index_for_timestamp(sensor, clicked_unix)
+        elif triggered_kind == "graph-map":
+            # Un punto de #4/#5 YA es una señal: se resuelve por posición dentro de la
+            # traza contra el MapDataset con el que se dibujó ese mapa (registro de
+            # proceso, ui/map_registry.py), sin buscar vecino más cercano por timestamp
+            # y sin depender de customdata -- ver ui/components/graph_map_common.py.
+            map_dataset = get_map_registry().get(triggered["index"])
+            if map_dataset is None:
+                raise PreventUpdate
+            click_target = resolve_map_click_signal_index(
+                ctx.triggered[0]["value"], map_dataset.signal_indices
+            )
+            if click_target is None:
+                raise PreventUpdate
 
         # La navegación paso a paso (Anterior/Siguiente y auto-play) salta las señales
         # excluidas por el filtrado del usuario: aterrizar en una señal que ni la
@@ -203,16 +297,21 @@ def register_callbacks(app: Dash) -> None:
         Output("pending-exclusion-indices", "data"),
         Input("graph-timeseries", "selectedData"),
         Input({"type": "graph-metric", "index": ALL}, "selectedData"),
+        Input({"type": "graph-map", "index": ALL}, "selectedData"),
         State("page-sensor", "data"),
         State("grouping-mode", "value"),
         State("grouping-value", "value"),
         prevent_initial_call=True,
     )
-    def _on_selection_changed(selected_timeseries, selected_metrics, sensor, grouping_mode, grouping_value):
+    def _on_selection_changed(
+        selected_timeseries, selected_metrics, selected_maps, sensor, grouping_mode, grouping_value,
+    ):
         # Traduce la selección con lazo/rectángulo de Plotly (en CUALQUIERA de las
-        # gráficas #1/#3) a índices crudos de señal a excluir -- todavía no aplica nada,
-        # solo deja la selección "pendiente" hasta que el usuario confirme con el botón
-        # "Filtrar selección" (PROMPT §7.1: seleccionar y filtrar son dos pasos).
+        # gráficas #1/#3, o en el mapa 2D -- #5 nunca dispara esto, Plotly no ofrece
+        # lazo/caja dentro de una escena 3D, decisión D2) a índices crudos de señal a
+        # excluir -- todavía no aplica nada, solo deja la selección "pendiente" hasta
+        # que el usuario confirme con el botón "Filtrar selección" (PROMPT §7.1:
+        # seleccionar y filtrar son dos pasos).
         state = get_state()
         dataset = state.dataset
         if dataset is None or sensor not in dataset.blocks:
@@ -221,12 +320,26 @@ def register_callbacks(app: Dash) -> None:
         triggered = ctx.triggered_id
 
         if triggered == "graph-timeseries":
-            x_range = resolve_timeseries_selection_range(selected_timeseries)
-            if x_range is None:
-                return []
-            x0 = elapsed_minutes_to_unix_seconds(x_range[0], dataset.t0)
-            x1 = elapsed_minutes_to_unix_seconds(x_range[1], dataset.t0)
-            return indices_in_time_range(block.timestamps, x0, x1).tolist()
+            # Señal a señal, no por franja temporal: ``build_timeseries_figure`` dibuja
+            # las señales de ``valid_mask & active_mask`` en ese orden, y cada una ocupa
+            # ENTRIES_PER_SEGMENT entradas de la traza -- ver
+            # ``resolve_timeseries_selection_indices``.
+            points = (selected_timeseries or {}).get("points") or []
+            active_signal_indices = np.where(block.valid_mask & state.get_active_mask(sensor))[0]
+            return resolve_timeseries_selection_indices(points, active_signal_indices)
+
+        if isinstance(triggered, dict) and triggered.get("type") == "graph-map":
+            if triggered["index"] != "2d":
+                # El mapa 3D (#5) es de solo lectura para filtrado (decisión D2,
+                # archivos_md/PLAN_MAPAS_2D_3D.md) -- en la práctica Plotly nunca
+                # dispara selectedData sobre una escena 3D, esto es solo defensivo.
+                raise PreventUpdate
+            map_dataset = get_map_registry().get(triggered["index"])
+            if map_dataset is None:
+                raise PreventUpdate
+            selected_data = ctx.triggered[0]["value"]
+            points = (selected_data or {}).get("points") or []
+            return resolve_map_selection_signal_indices(points, map_dataset.signal_indices)
 
         if isinstance(triggered, dict) and triggered.get("type") == "graph-metric":
             regimen, _metric_id = decode_metric_option(triggered["index"])
@@ -590,6 +703,107 @@ def register_callbacks(app: Dash) -> None:
 
         registry.replace_all(registry_entries)
         return graphs
+
+    # --- Mapas de separación #4/#5 (archivos_md/prompt-mapas2d3d.md) -----------------
+
+    @app.callback(
+        Output("maps-container", "children"),
+        Input("map-2d-enabled", "value"),
+        Input("map-2d-x-metric", "value"),
+        Input("map-2d-y-metric", "value"),
+        Input("map-3d-enabled", "value"),
+        Input("map-3d-x-metric", "value"),
+        Input("map-3d-y-metric", "value"),
+        Input("map-3d-z-metric", "value"),
+        Input("dataset-version", "data"),
+        Input("filter-version", "data"),
+        State("page-sensor", "data"),
+        State("nav-index", "value"),
+    )
+    def _on_refresh_maps(
+        map_2d_enabled_value, x2d, y2d,
+        map_3d_enabled_value, x3d, y3d, z3d,
+        dataset_version, filter_version, sensor, nav_value,
+    ):
+        # "maps-container" es hermano y SIEMPRE posterior a "metrics-graphs-container"
+        # en el layout (ui/components/sensor_window.py) -- el orden "los mapas siempre
+        # quedan últimos" (§2 del prompt) ya está garantizado por esa estructura, este
+        # callback solo decide QUÉ va dentro de este contenedor, nunca reordena nada
+        # fuera de él.
+        #
+        # Deshabilitado = no se renderiza ni se calcula (§3 del prompt): si el checkbox
+        # correspondiente no está marcado, ni siquiera se construye el mapa -- la
+        # configuración de ejes queda intacta en los propios dropdowns (componentes
+        # estáticos del panel de control, nunca destruidos por este callback) para
+        # cuando se vuelva a habilitar.
+        #
+        # ``nav-index`` es ``State``, no ``Input``: solo siembra el resaltado inicial de
+        # la figura recién construida (misma señal que ya muestra la Gráfica #2). El
+        # resaltado en vivo al navegar lo mueve ``_on_refresh_map_highlight`` con un
+        # parche ligero, sin volver a pasar por aquí -- reconstruir la nube completa de
+        # puntos en cada "Siguiente"/auto-play sería recalcular en cada render lo que el
+        # PROMPT pide evitar (§7 restricciones técnicas).
+        registry = get_map_registry()
+        state = get_state()
+        dataset = state.dataset
+        if dataset is None or sensor not in dataset.blocks:
+            registry.set("2d", None)
+            registry.set("3d", None)
+            return []
+
+        selected_signal_index = int(nav_value) if nav_value is not None else None
+
+        block = dataset.blocks[sensor]
+        cfg = dataset.sensor_configs[sensor]
+        active_mask = state.get_active_mask(sensor)
+
+        slots = []
+        if _is_checked(map_2d_enabled_value, "show"):
+            slots.append(_render_map_2d_slot(
+                state.cache, block, cfg, dataset, sensor, x2d, y2d, active_mask, selected_signal_index, registry,
+            ))
+        else:
+            registry.set("2d", None)
+        if _is_checked(map_3d_enabled_value, "show"):
+            slots.append(_render_map_3d_slot(
+                state.cache, block, cfg, dataset, sensor, x3d, y3d, z3d, active_mask, selected_signal_index, registry,
+            ))
+        else:
+            registry.set("3d", None)
+        return slots
+
+    @app.callback(
+        Output({"type": "graph-map", "index": ALL}, "figure", allow_duplicate=True),
+        Input("nav-index", "value"),
+        State({"type": "graph-map", "index": ALL}, "id"),
+        prevent_initial_call=True,
+    )
+    def _on_refresh_map_highlight(nav_value, map_ids):
+        # Parche ligero: solo mueve la traza de resaltado (HIGHLIGHT_TRACE_INDEX,
+        # siempre la segunda de cada mapa) al índice de señal que acaba de quedar
+        # activo -- nunca recalcula ``build_map_dataset`` ni reconstruye la nube de
+        # puntos. Lee del registro que ``_on_refresh_maps`` llenó por última vez, mismo
+        # patrón que la línea de referencia (``ui/reference_registry.py``) usa para
+        # recalcular su promedio sin volver a pasar por el caché.
+        #
+        # ``map_ids`` degrada con normalidad a 0, 1 o 2 elementos según qué mapas estén
+        # habilitados -- {"type": "graph-map", "index": ALL} nunca falla por "componente
+        # inexistente", es justamente para eso que existe el patrón ALL.
+        if not map_ids:
+            raise PreventUpdate
+        registry = get_map_registry()
+        selected = int(nav_value) if nav_value is not None else None
+
+        patches = []
+        for map_id in map_ids:
+            map_dataset = registry.get(map_id["index"])
+            patch = Patch()
+            if map_dataset is not None:
+                highlight = resolve_map_highlight_coords(map_dataset, selected)
+                for axis, values in highlight.items():
+                    patch["data"][HIGHLIGHT_TRACE_INDEX][axis] = values
+            patches.append(patch)
+        return patches
 
     # --- Controles dependientes del bloque "Opciones de visualización" ---------------
 

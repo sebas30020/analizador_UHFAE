@@ -1,0 +1,20 @@
+{
+  "n_senales": 12484,
+  "sensor": "UHF",
+  "build_2d_frio_ms": 865.2227999991737,
+  "build_3d_frio_ms_solo_eje_nuevo": 469.4554000161588,
+  "build_2d_caliente_ms": 30.047199979890138,
+  "n_puntos_2d": 12484,
+  "omitidos_2d": {
+    "x": 0,
+    "y": 0
+  },
+  "build_3d_caliente_ms": 51.78619996877387,
+  "n_puntos_3d": 12484,
+  "figura_2d_ms": 15.304700005799532,
+  "figura_3d_ms": 32.179600035306066,
+  "resaltado_2d_ms": 0.03484997432678938,
+  "resaltado_3d_ms": 0.034550001146271825,
+  "build_2d_con_filtro_ms": 25.405599968507886,
+  "n_puntos_2d_con_filtro": 6242
+}

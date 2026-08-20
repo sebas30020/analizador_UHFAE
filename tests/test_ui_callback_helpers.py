@@ -11,6 +11,8 @@ from ui.callbacks.helpers import (
     encode_metric_option,
     parse_compare_indices,
     parse_route,
+    resolve_map_axis_status,
+    resolve_map_click_signal_index,
     resolve_nav_index,
 )
 
@@ -58,6 +60,13 @@ def test_resolve_nav_index_clamps_at_edges():
 def test_resolve_nav_index_click_on_graph_uses_target():
     assert resolve_nav_index("graph-timeseries", None, current_index=10, n_total=100, click_target_index=77) == 77
     assert resolve_nav_index("graph-metric", None, current_index=10, n_total=100, click_target_index=33) == 33
+
+
+def test_resolve_nav_index_click_on_map_uses_target():
+    # Click en el mapa 2D o 3D (#4/#5): mismo trato que #1/#3, pero el target ya viene
+    # exacto (customdata), no de una búsqueda por timestamp -- ver
+    # resolve_map_click_signal_index más abajo.
+    assert resolve_nav_index("graph-map", None, current_index=10, n_total=100, click_target_index=55) == 55
 
 
 def test_resolve_nav_index_initial_load_keeps_current():
@@ -185,3 +194,65 @@ def test_autoplay_interval_falls_back_on_empty_or_invalid_speed():
     assert autoplay_interval_ms(None) == autoplay_interval_ms(AUTOPLAY_DEFAULT_SPEED_HZ)
     assert autoplay_interval_ms(0) == autoplay_interval_ms(AUTOPLAY_DEFAULT_SPEED_HZ)
     assert autoplay_interval_ms(-3.0) == autoplay_interval_ms(AUTOPLAY_DEFAULT_SPEED_HZ)
+
+
+# --- estado de los ejes de los mapas de separación (#4/#5) ---
+
+def test_resolve_map_axis_status_missing_axis_is_not_assigned():
+    assert resolve_map_axis_status(["rms", None]) == (False, False)
+    assert resolve_map_axis_status([None, None, None]) == (False, False)
+
+
+def test_resolve_map_axis_status_all_assigned_no_duplicate():
+    assert resolve_map_axis_status(["rms", "kurtosis"]) == (True, False)
+    assert resolve_map_axis_status(["rms", "kurtosis", "vpp"]) == (True, False)
+
+
+def test_resolve_map_axis_status_all_assigned_with_duplicate():
+    assert resolve_map_axis_status(["rms", "rms"]) == (True, True)
+    assert resolve_map_axis_status(["rms", "kurtosis", "rms"]) == (True, True)
+
+
+# --- resolve_map_click_signal_index (click en #4/#5 -> Gráfica #2) ---
+#
+# Se resuelve por curveNumber+pointNumber, NUNCA por customdata: Dash no lo entrega
+# cuando plotly.py serializa el array como typed array en base64 (ver
+# ui/components/graph_map_common.py). Estas pruebas usan payloads con la forma REAL que
+# llega del navegador -- sin customdata.
+
+_SIGNAL_INDICES = np.array([10, 4821, 77, 3])
+
+
+def test_resolve_map_click_signal_index_maps_point_position_to_signal_index():
+    click_data = {"points": [{"curveNumber": 0, "pointNumber": 1, "x": 1.2, "y": 3.4}]}
+    assert resolve_map_click_signal_index(click_data, _SIGNAL_INDICES) == 4821
+
+
+def test_resolve_map_click_signal_index_accepts_point_index_alias():
+    # Algunos tipos de traza reportan pointIndex en vez de pointNumber.
+    click_data = {"points": [{"curveNumber": 0, "pointIndex": 2}]}
+    assert resolve_map_click_signal_index(click_data, _SIGNAL_INDICES) == 77
+
+
+def test_resolve_map_click_signal_index_ignores_highlight_trace():
+    # curveNumber=1 es la traza de resaltado -- clicar sobre la señal ya seleccionada
+    # no debe navegar a ninguna parte, no es un error.
+    click_data = {"points": [{"curveNumber": 1, "pointNumber": 0}]}
+    assert resolve_map_click_signal_index(click_data, _SIGNAL_INDICES) is None
+
+
+def test_resolve_map_click_signal_index_no_points_returns_none():
+    assert resolve_map_click_signal_index({"points": []}, _SIGNAL_INDICES) is None
+    assert resolve_map_click_signal_index(None, _SIGNAL_INDICES) is None
+    assert resolve_map_click_signal_index({}, _SIGNAL_INDICES) is None
+
+
+def test_resolve_map_click_signal_index_without_position_returns_none():
+    assert resolve_map_click_signal_index({"points": [{"curveNumber": 0}]}, _SIGNAL_INDICES) is None
+
+
+def test_resolve_map_click_signal_index_out_of_range_returns_none():
+    # Figura y registro desincronizados (evento en vuelo del dibujo anterior): descartar
+    # es correcto, navegar con un índice de la generación previa sería peor.
+    click_data = {"points": [{"curveNumber": 0, "pointNumber": 999}]}
+    assert resolve_map_click_signal_index(click_data, _SIGNAL_INDICES) is None
