@@ -57,6 +57,11 @@ input, .Select-control { background:#FFFFFF; color:#23262D; border:1px solid #D3
 .sensor-empty-notice { background:#FDF6E8; border:1px solid #E9D9A8; color:#8A6A0A; border-radius:6px;
                         padding:8px 12px; font-size:13px; margin-bottom:4px; }
 .sensor-empty-notice.hidden { display:none; }
+.btn-autoplay.playing { background:#E8F1FA; border-color:#9FC2E3; color:#20527D; font-weight:600; }
+.autoplay-speed { display:flex; align-items:center; gap:6px; width:190px; }
+.autoplay-speed label { margin:0; font-size:12px; color:#5B6472; white-space:nowrap; }
+.autoplay-speed .rc-slider { flex:1; margin:0 6px; }
+.autoplay-status { font-size:12px; color:#7A8290; min-width:88px; }
 """
 
 

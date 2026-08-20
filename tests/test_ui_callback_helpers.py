@@ -1,4 +1,11 @@
+import numpy as np
+
 from ui.callbacks.helpers import (
+    AUTOPLAY_DEFAULT_SPEED_HZ,
+    AUTOPLAY_MIN_INTERVAL_MS,
+    AUTOPLAY_SPEED_OPTIONS_HZ,
+    AUTOPLAY_TRIGGER_ID,
+    autoplay_interval_ms,
     clamp_index,
     decode_metric_option,
     encode_metric_option,
@@ -93,3 +100,88 @@ def test_encode_decode_distinguishes_regimen_for_same_metric_id():
     b = encode_metric_option("grupo_reduccion", "kurtosis")
     assert a != b
     assert decode_metric_option(a)[0] != decode_metric_option(b)[0]
+
+
+# --- Auto-play y navegación consciente del filtrado (rama auto-play) ---
+#
+# Las señales 2, 3 y 6 están excluidas por el usuario: la navegación paso a paso debe
+# saltárselas, y el auto-play además cerrar el bucle del último activo al primero.
+
+_ACTIVOS = np.array([0, 1, 4, 5, 7])  # de n_total=8; excluidas: 2, 3, 6
+
+
+def test_next_skips_filtered_signals():
+    assert resolve_nav_index("btn-next", None, current_index=1, n_total=8, active_indices=_ACTIVOS) == 4
+    assert resolve_nav_index("btn-next", None, current_index=5, n_total=8, active_indices=_ACTIVOS) == 7
+
+
+def test_prev_skips_filtered_signals():
+    assert resolve_nav_index("btn-prev", None, current_index=4, n_total=8, active_indices=_ACTIVOS) == 1
+    assert resolve_nav_index("btn-prev", None, current_index=7, n_total=8, active_indices=_ACTIVOS) == 5
+
+
+def test_next_and_prev_stop_at_the_edges_of_the_active_set():
+    # Los botones manuales no dan la vuelta: se quedan en el extremo, como siempre.
+    assert resolve_nav_index("btn-next", None, current_index=7, n_total=8, active_indices=_ACTIVOS) == 7
+    assert resolve_nav_index("btn-prev", None, current_index=0, n_total=8, active_indices=_ACTIVOS) == 0
+
+
+def test_autoplay_advances_like_next():
+    assert resolve_nav_index(AUTOPLAY_TRIGGER_ID, None, current_index=1, n_total=8, active_indices=_ACTIVOS) == 4
+
+
+def test_autoplay_wraps_from_last_active_to_first():
+    assert resolve_nav_index(AUTOPLAY_TRIGGER_ID, None, current_index=7, n_total=8, active_indices=_ACTIVOS) == 0
+
+
+def test_navigation_from_an_excluded_signal_lands_on_an_active_one():
+    # El usuario puede estar viendo una señal y filtrarla después: avanzar desde ahí
+    # debe llevar al siguiente activo, no al índice+1 (que podría seguir excluido).
+    assert resolve_nav_index("btn-next", None, current_index=2, n_total=8, active_indices=_ACTIVOS) == 4
+    assert resolve_nav_index("btn-prev", None, current_index=3, n_total=8, active_indices=_ACTIVOS) == 1
+
+
+def test_typed_index_ignores_the_filter_mask():
+    # Teclear un índice es pedir esa señal concreta, aunque esté excluida del análisis.
+    assert resolve_nav_index("nav-index", 3, current_index=0, n_total=8, active_indices=_ACTIVOS) == 3
+
+
+def test_without_mask_behaviour_is_the_previous_one():
+    # No-regresión: sin información de filtrado, el paso es el ±1 acotado de siempre.
+    assert resolve_nav_index("btn-next", None, current_index=10, n_total=100) == 11
+    assert resolve_nav_index("btn-prev", None, current_index=10, n_total=100) == 9
+    assert resolve_nav_index("btn-next", None, current_index=99, n_total=100) == 99
+
+
+def test_with_every_signal_filtered_out_navigation_degrades_gracefully():
+    vacio = np.array([], dtype=np.int64)
+    assert resolve_nav_index("btn-next", None, current_index=5, n_total=8, active_indices=vacio) == 6
+    assert resolve_nav_index(AUTOPLAY_TRIGGER_ID, None, current_index=7, n_total=8, active_indices=vacio) == 7
+
+
+def test_single_active_signal_keeps_autoplay_in_place():
+    # El callback traduce "no me moví" en PreventUpdate para no repintar en vano.
+    uno = np.array([3])
+    assert resolve_nav_index(AUTOPLAY_TRIGGER_ID, None, current_index=3, n_total=8, active_indices=uno) == 3
+
+
+# --- velocidad de auto-play ---
+
+def test_autoplay_interval_translates_speed_to_period():
+    assert autoplay_interval_ms(1.0) == 1000
+    assert autoplay_interval_ms(2.0) == 500
+    assert autoplay_interval_ms(0.5) == 2000
+
+
+def test_autoplay_interval_never_goes_below_the_safe_floor():
+    # Ninguna velocidad -- ni una inyectada fuera del selector -- puede pedir cuadros
+    # más rápido de lo que el navegador los dibuja.
+    assert autoplay_interval_ms(1000.0) == AUTOPLAY_MIN_INTERVAL_MS
+    for speed in AUTOPLAY_SPEED_OPTIONS_HZ:
+        assert autoplay_interval_ms(speed) >= AUTOPLAY_MIN_INTERVAL_MS
+
+
+def test_autoplay_interval_falls_back_on_empty_or_invalid_speed():
+    assert autoplay_interval_ms(None) == autoplay_interval_ms(AUTOPLAY_DEFAULT_SPEED_HZ)
+    assert autoplay_interval_ms(0) == autoplay_interval_ms(AUTOPLAY_DEFAULT_SPEED_HZ)
+    assert autoplay_interval_ms(-3.0) == autoplay_interval_ms(AUTOPLAY_DEFAULT_SPEED_HZ)

@@ -24,6 +24,8 @@ from ui.callbacks.filtering import (
     resolve_timeseries_selection_range,
 )
 from ui.callbacks.helpers import (
+    AUTOPLAY_TRIGGER_ID,
+    autoplay_interval_ms,
     clamp_index,
     decode_metric_option,
     parse_compare_indices,
@@ -114,10 +116,11 @@ def register_callbacks(app: Dash) -> None:
         Input("graph-timeseries", "clickData"),
         Input({"type": "graph-metric", "index": ALL}, "clickData"),
         Input("dataset-version", "data"),
+        Input("autoplay-interval", "n_intervals"),
         State("page-sensor", "data"),
         prevent_initial_call=True,
     )
-    def _on_navigate(n_prev, n_next, nav_value, click_timeseries, click_metrics, dataset_version, sensor):
+    def _on_navigate(n_prev, n_next, nav_value, click_timeseries, click_metrics, dataset_version, n_intervals, sensor):
         state = get_state()
         dataset = state.dataset
         if dataset is None or sensor not in dataset.blocks:
@@ -145,9 +148,54 @@ def register_callbacks(app: Dash) -> None:
             clicked_unix = elapsed_minutes_to_unix_seconds(float(points[0]["x"]), dataset.t0)
             click_target = state.nearest_index_for_timestamp(sensor, clicked_unix)
 
-        new_index = resolve_nav_index(triggered_kind, nav_value, current, n_total, click_target)
+        # La navegación paso a paso (Anterior/Siguiente y auto-play) salta las señales
+        # excluidas por el filtrado del usuario: aterrizar en una señal que ni la
+        # gráfica #1 ni las #3 dibujan sería incoherente con el resto de la ventana.
+        # El resto de disparos (índice tecleado, clic en gráfica) no la necesitan.
+        active_indices = None
+        if triggered_kind in ("btn-prev", "btn-next", AUTOPLAY_TRIGGER_ID):
+            active_indices = np.where(state.get_active_mask(sensor))[0]
+
+        new_index = resolve_nav_index(triggered_kind, nav_value, current, n_total, click_target, active_indices)
+        if new_index == current and triggered_kind == AUTOPLAY_TRIGGER_ID:
+            # Una sola señal activa (o ninguna): el bucle no tiene a dónde avanzar. Sin
+            # esto, cada tick reescribiría el mismo valor y dispararía un repintado
+            # completo de la gráfica #2 para no mover nada.
+            raise PreventUpdate
+
         state.set_active_index(sensor, new_index)
         return new_index
+
+    # --- Auto-play (recorrido automático de señales) ----------------------------------
+
+    @app.callback(
+        Output("autoplay-interval", "disabled"),
+        Output("btn-autoplay", "children"),
+        Output("btn-autoplay", "className"),
+        Input("btn-autoplay", "n_clicks"),
+        State("autoplay-interval", "disabled"),
+        prevent_initial_call=True,
+    )
+    def _on_toggle_autoplay(n_clicks, is_disabled):
+        """Conmuta reproducción/pausa. El estado vive en el propio ``dcc.Interval``
+        (``disabled``), no en un Store aparte: es el componente que realmente decide si
+        hay ticks, así que duplicarlo solo daría dos fuentes de verdad que sincronizar.
+        """
+        start_playing = bool(is_disabled)
+        label = "⏸ Pausar" if start_playing else "▶ Auto-play"
+        class_name = "btn-autoplay playing" if start_playing else "btn-autoplay"
+        return (not start_playing), label, class_name
+
+    @app.callback(
+        Output("autoplay-interval", "interval"),
+        Output("autoplay-status", "children"),
+        Input("autoplay-speed", "value"),
+    )
+    def _on_change_autoplay_speed(speed_hz):
+        """La velocidad se puede cambiar con la reproducción en marcha: Dash aplica el
+        ``interval`` nuevo al vuelo, sin reiniciar el recorrido."""
+        interval_ms = autoplay_interval_ms(speed_hz)
+        return interval_ms, f"{1000 / interval_ms:.1f} señales/s"
 
     # --- Filtrado cruzado (Fase 6, PROMPT §7) -----------------------------------------
 
