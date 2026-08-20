@@ -12,6 +12,7 @@ from ui.callbacks.helpers import (
     parse_compare_indices,
     parse_route,
     resolve_map_axis_status,
+    resolve_map_click_signal_index,
     resolve_nav_index,
 )
 
@@ -59,6 +60,13 @@ def test_resolve_nav_index_clamps_at_edges():
 def test_resolve_nav_index_click_on_graph_uses_target():
     assert resolve_nav_index("graph-timeseries", None, current_index=10, n_total=100, click_target_index=77) == 77
     assert resolve_nav_index("graph-metric", None, current_index=10, n_total=100, click_target_index=33) == 33
+
+
+def test_resolve_nav_index_click_on_map_uses_target():
+    # Click en el mapa 2D o 3D (#4/#5): mismo trato que #1/#3, pero el target ya viene
+    # exacto (customdata), no de una búsqueda por timestamp -- ver
+    # resolve_map_click_signal_index más abajo.
+    assert resolve_nav_index("graph-map", None, current_index=10, n_total=100, click_target_index=55) == 55
 
 
 def test_resolve_nav_index_initial_load_keeps_current():
@@ -203,3 +211,28 @@ def test_resolve_map_axis_status_all_assigned_no_duplicate():
 def test_resolve_map_axis_status_all_assigned_with_duplicate():
     assert resolve_map_axis_status(["rms", "rms"]) == (True, True)
     assert resolve_map_axis_status(["rms", "kurtosis", "rms"]) == (True, True)
+
+
+# --- resolve_map_click_signal_index (click en #4/#5 -> Gráfica #2) ---
+
+def test_resolve_map_click_signal_index_reads_customdata():
+    click_data = {"points": [{"x": 1.2, "y": 3.4, "customdata": 4821}]}
+    assert resolve_map_click_signal_index(click_data) == 4821
+
+
+def test_resolve_map_click_signal_index_handles_customdata_as_single_element_list():
+    # Plotly serializa customdata escalar como lista de un elemento en algunos casos.
+    click_data = {"points": [{"customdata": [4821]}]}
+    assert resolve_map_click_signal_index(click_data) == 4821
+
+
+def test_resolve_map_click_signal_index_no_points_returns_none():
+    assert resolve_map_click_signal_index({"points": []}) is None
+    assert resolve_map_click_signal_index(None) is None
+    assert resolve_map_click_signal_index({}) is None
+
+
+def test_resolve_map_click_signal_index_missing_customdata_returns_none():
+    # La traza de resaltado no trae customdata -- clicar sobre la señal ya seleccionada
+    # no debe hacer nada, no es un error.
+    assert resolve_map_click_signal_index({"points": [{"x": 1.0, "y": 2.0}]}) is None

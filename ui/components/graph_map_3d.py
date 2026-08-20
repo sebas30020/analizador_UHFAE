@@ -17,7 +17,6 @@ navegación (click, hover, órbita) -- no alimenta el filtrado. Esa responsabili
 """
 from __future__ import annotations
 
-import numpy as np
 import plotly.graph_objects as go
 
 from ui.components.graph_map_common import (
@@ -30,7 +29,12 @@ from ui.components.graph_map_common import (
     build_map_info_annotation,
     build_omitted_message,
 )
-from viz.maps import MapDataset
+from viz.maps import MapDataset, resolve_map_highlight_coords
+
+# Misma convención que ``graph_map_2d.HIGHLIGHT_TRACE_INDEX``: la traza de resaltado es
+# SIEMPRE la segunda (índice 1), para que el parche ligero de navegación
+# (``_on_refresh_map_highlight``) no tenga que buscarla por nombre.
+HIGHLIGHT_TRACE_INDEX = 1
 
 MAP_3D_HEIGHT = 480
 
@@ -45,8 +49,11 @@ def build_map_3d_figure(
     entrada que :func:`ui.components.graph_map_2d.build_map_2d_figure`, con
     ``metric_ids={"x":..., "y":..., "z":...}`` al construir el ``dataset``.
 
-    ``selected_signal_index``/``same_metric_warning``: mismo significado que en el mapa
-    2D -- ver su docstring.
+    ``selected_signal_index``: la traza de resaltado (segunda traza,
+    ``HIGHLIGHT_TRACE_INDEX``) SIEMPRE está presente -- vacía o con un punto, ver
+    docstring de :func:`ui.components.graph_map_2d.build_map_2d_figure`.
+
+    ``same_metric_warning``: mismo significado que en el mapa 2D.
     """
     x, y, z = dataset.coords["x"], dataset.coords["y"], dataset.coords["z"]
     indices = dataset.signal_indices
@@ -67,17 +74,14 @@ def build_map_3d_figure(
         )
     )
 
-    if selected_signal_index is not None:
-        pos = np.where(indices == selected_signal_index)[0]
-        if pos.size > 0:
-            i = int(pos[0])
-            fig.add_trace(
-                go.Scatter3d(
-                    x=[x[i]], y=[y[i]], z=[z[i]], mode="markers",
-                    marker=dict(size=HIGHLIGHT_MARKER_SIZE_3D, color=HIGHLIGHT_COLOR, symbol="circle"),
-                    hoverinfo="skip", showlegend=False, name="Seleccionada",
-                )
-            )
+    highlight = resolve_map_highlight_coords(dataset, selected_signal_index)
+    fig.add_trace(
+        go.Scatter3d(
+            x=highlight["x"], y=highlight["y"], z=highlight["z"], mode="markers",
+            marker=dict(size=HIGHLIGHT_MARKER_SIZE_3D, color=HIGHLIGHT_COLOR, symbol="circle"),
+            hoverinfo="skip", showlegend=False, name="Seleccionada",
+        )
+    )
 
     lines: list[str] = []
     if x.shape[0] == 0:

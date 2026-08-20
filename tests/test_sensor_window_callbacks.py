@@ -517,7 +517,93 @@ def _call_navigate(dash_app, state, monkeypatch, triggered_id, nav_value=None, s
 
     monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id=triggered_id, triggered=[{"value": None}]))
     fn = _wrapped(dash_app, "nav-index.value")
-    return fn(None, None, nav_value, None, [], state.dataset_version, 1, sensor)
+    return fn(None, None, nav_value, None, [], [], state.dataset_version, 1, sensor)
+
+
+def test_click_on_map_navigates_to_signal_from_customdata(app_and_state, monkeypatch):
+    # Mismo camino que un click real en #4/#5 (id de patrón {"type": "graph-map",
+    # "index": "2d"|"3d"}): el índice de señal viene directo de customdata, sin pasar
+    # por AppState.nearest_index_for_timestamp (a diferencia de #1/#3).
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+    click_data = {"points": [{"customdata": 1, "x": 0.1, "y": 0.2}]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id={"type": "graph-map", "index": "2d"}, triggered=[{"value": click_data}]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    result = fn(None, None, None, None, [], [click_data], state.dataset_version, 1, "UHF")
+    assert result == 1
+
+
+def test_click_on_map_without_customdata_prevents_update(app_and_state, monkeypatch):
+    # La traza de resaltado no trae customdata -- clicar sobre la propia señal
+    # seleccionada no debe hacer nada (ni error, ni navegación).
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    click_data = {"points": [{"x": 0.1, "y": 0.2}]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id={"type": "graph-map", "index": "2d"}, triggered=[{"value": click_data}]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, None, [], [click_data], state.dataset_version, 1, "UHF")
+
+
+def _map_highlight_key(dash_app) -> str:
+    for k in dash_app.callback_map:
+        if "graph-map" in k and "figure" in k:
+            return k
+    raise AssertionError("no se encontró el callback de resaltado de los mapas")
+
+
+def test_map_highlight_patch_moves_highlight_trace_without_recomputing(app_and_state, monkeypatch):
+    # Habilita el mapa 2D (vmax/rms) vía _on_refresh_maps -- esto llena el registro
+    # (ui/map_registry.py) que _on_refresh_map_highlight necesita para no recalcular.
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id=None, triggered=[{"value": None}]))
+    refresh_maps = _wrapped(dash_app, "maps-container.children")
+    refresh_maps(
+        ["show"], "vmax", "rms",
+        [], None, None, None,
+        state.dataset_version, state.filter_version, "UHF", 0,
+    )
+
+    highlight_fn = _wrapped(dash_app, _map_highlight_key(dash_app))
+    map_ids = [{"index": "2d", "type": "graph-map"}]
+    # Señal 2: tras el ordenamiento cronológico del fixture (ingest_sensor ordena por
+    # timestamp explícitamente), el índice global 1 corresponde a la señal con
+    # vrange=0 (inválida, excluida del mapa) -- 2 sí es una señal válida presente.
+    patches = highlight_fn(2, map_ids)
+    assert len(patches) == 1
+
+    ops = {op["location"][-1]: op["params"]["value"] for op in patches[0].to_plotly_json()["operations"]}
+    # Un solo punto por eje, sin volver a pasar por build_map_dataset.
+    assert len(ops["x"]) == 1 and len(ops["y"]) == 1
+
+
+def test_map_highlight_patch_empty_when_no_map_enabled(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    monkeypatch.setattr(swc, "ctx", SimpleNamespace(triggered_id=None, triggered=[{"value": None}]))
+    refresh_maps = _wrapped(dash_app, "maps-container.children")
+    refresh_maps(
+        [], None, None,   # mapa 2D deshabilitado
+        [], None, None, None,
+        state.dataset_version, state.filter_version, "UHF", 0,
+    )
+
+    highlight_fn = _wrapped(dash_app, _map_highlight_key(dash_app))
+    # Sin mapas montados, {"type": "graph-map", "index": ALL} degrada a lista vacía.
+    with pytest.raises(PreventUpdate):
+        highlight_fn(1, [])
 
 
 def test_autoplay_tick_advances_to_the_next_signal(app_and_state, monkeypatch):

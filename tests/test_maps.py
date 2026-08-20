@@ -8,7 +8,7 @@ import pytest
 from cache.backend import SqliteHdf5CacheBackend
 from core.models import SensorConfig, SignalBlock
 from metrics.registry import discover_metrics
-from viz.maps import build_map_dataset
+from viz.maps import MapDataset, build_map_dataset, resolve_map_highlight_coords
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -147,3 +147,44 @@ def test_empty_metric_ids_raises(cache, sensor_config):
     block = _block([[1, 2, 3, 4]], [0.0])
     with pytest.raises(ValueError):
         build_map_dataset(cache, block, sensor_config, "ds1", {})
+
+
+# --- resolve_map_highlight_coords (resaltado bidireccional, §5.3 del prompt) ------------
+
+def _highlight_dataset() -> MapDataset:
+    return MapDataset(
+        signal_indices=np.array([10, 20, 30]),
+        coords={"x": np.array([1.0, 2.0, 3.0]), "y": np.array([4.0, 5.0, 6.0])},
+        omitted_counts={"x": 0, "y": 0},
+        axis_labels={"x": "Vmax (V)", "y": "RMS (V)"},
+    )
+
+
+def test_resolve_map_highlight_coords_signal_present_returns_one_row():
+    dataset = _highlight_dataset()
+    result = resolve_map_highlight_coords(dataset, 20)
+    assert result == {"x": [2.0], "y": [5.0]}
+
+
+def test_resolve_map_highlight_coords_signal_absent_returns_empty():
+    dataset = _highlight_dataset()
+    result = resolve_map_highlight_coords(dataset, 999)
+    assert result == {"x": [], "y": []}
+
+
+def test_resolve_map_highlight_coords_no_selection_returns_empty():
+    dataset = _highlight_dataset()
+    result = resolve_map_highlight_coords(dataset, None)
+    assert result == {"x": [], "y": []}
+
+
+def test_resolve_map_highlight_coords_matches_dataset_axis_keys():
+    # El mapa 3D tiene un eje más -- la función no distingue 2D de 3D, solo sigue las
+    # claves que trae dataset.coords.
+    dataset = MapDataset(
+        signal_indices=np.array([5]),
+        coords={"x": np.array([1.0]), "y": np.array([2.0]), "z": np.array([3.0])},
+        omitted_counts={"x": 0, "y": 0, "z": 0},
+        axis_labels={"x": "a", "y": "b", "z": "c"},
+    )
+    assert resolve_map_highlight_coords(dataset, 5) == {"x": [1.0], "y": [2.0], "z": [3.0]}

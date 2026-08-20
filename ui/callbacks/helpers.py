@@ -128,6 +128,10 @@ def resolve_nav_index(
     - clic en gráfica #1 o #3: usa ``click_target_index`` (ya resuelto por
       ``AppState.nearest_index_for_timestamp``). Esas gráficas solo dibujan señales
       activas, así que el objetivo ya viene filtrado por construcción.
+    - clic en el mapa 2D o 3D (``"graph-map"``, archivos_md/prompt-mapas2d3d.md §5.1):
+      usa ``click_target_index``, ya resuelto por :func:`resolve_map_click_signal_index`
+      -- viene directo de ``customdata`` del punto clicado, no de una búsqueda por
+      timestamp.
     - cualquier otro disparo (carga inicial): mantiene el índice actual.
 
     ``active_indices``: ver :func:`step_to_adjacent_active`.
@@ -141,11 +145,40 @@ def resolve_nav_index(
 
     if triggered_id == "nav-index":
         target = nav_index_value if nav_index_value is not None else current_index
-    elif triggered_id in ("graph-timeseries", "graph-metric") and click_target_index is not None:
+    elif triggered_id in ("graph-timeseries", "graph-metric", "graph-map") and click_target_index is not None:
         target = click_target_index
     else:
         target = current_index
     return clamp_index(int(target), n_total)
+
+
+def resolve_map_click_signal_index(click_data: dict | None) -> int | None:
+    """Índice global de señal del punto clicado en el mapa 2D o 3D (#4/#5,
+    ``archivos_md/prompt-mapas2d3d.md`` §5.1).
+
+    A diferencia de las gráficas #1/#3 (que dibujan minutos transcurridos y necesitan
+    ``AppState.nearest_index_for_timestamp`` para volver al índice de señal), los mapas
+    ya sembraron el índice global de señal como ``customdata`` de cada punto
+    (``ui/components/graph_map_2d.py``, ``graph_map_3d.py``) -- viene exacto, sin
+    búsqueda por vecino más cercano.
+
+    ``None`` si no hay puntos clicados o si el punto clicado no trae ``customdata`` (la
+    traza de resaltado, ``HIGHLIGHT_TRACE_INDEX``, no lo tiene -- clicar sobre la propia
+    señal ya seleccionada no debe hacer nada, no es un error).
+    """
+    if not click_data:
+        return None
+    points = click_data.get("points") or []
+    if not points:
+        return None
+    customdata = points[0].get("customdata")
+    if customdata is None:
+        return None
+    if isinstance(customdata, (list, tuple)):
+        if not customdata:
+            return None
+        customdata = customdata[0]
+    return int(customdata)
 
 
 VALID_SENSORS = ("UHF", "AE", "UHF_KS")

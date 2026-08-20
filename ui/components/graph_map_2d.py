@@ -15,7 +15,6 @@ son iconos del modebar por defecto -- lo que activa el filtrado es el callback q
 """
 from __future__ import annotations
 
-import numpy as np
 import plotly.graph_objects as go
 
 from ui.components.graph_map_common import (
@@ -28,7 +27,13 @@ from ui.components.graph_map_common import (
     build_map_info_annotation,
     build_omitted_message,
 )
-from viz.maps import MapDataset
+from viz.maps import MapDataset, resolve_map_highlight_coords
+
+# Índice de la traza de resaltado dentro de ``fig.data`` -- SIEMPRE la segunda traza
+# (ver docstring de ``build_map_2d_figure``), constante que reutiliza el parche ligero
+# de navegación (``ui/callbacks/sensor_window_callbacks.py::_on_refresh_map_highlight``)
+# para no tener que buscarla por nombre en cada patch.
+HIGHLIGHT_TRACE_INDEX = 1
 
 MAP_2D_HEIGHT = 420
 
@@ -44,9 +49,11 @@ def build_map_2d_figure(
     llamado con ``{"x": metric_id_x, "y": metric_id_y}``).
 
     ``selected_signal_index``: índice global de señal actualmente activa
-    (``AppState``/``nav-index``, mismo bus que ya usan #1 y #3). Si está presente en el
-    mapa, se redibuja resaltada encima de la nube de puntos -- resaltado bidireccional
-    con la Gráfica #2 y el mapa #5 (§5.3 del prompt).
+    (``AppState``/``nav-index``, mismo bus que ya usan #1 y #3). La traza de resaltado
+    (segunda traza, ``HIGHLIGHT_TRACE_INDEX``) SIEMPRE está presente -- vacía si la señal
+    no está en el mapa (sin selección, filtrada, o con NaN en algún eje), con un punto
+    si sí -- para que el resaltado en vivo al navegar (``_on_refresh_map_highlight``)
+    pueda actualizarla con un ``dash.Patch`` sin reconstruir la figura completa.
 
     ``same_metric_warning``: la misma métrica en ambos ejes es válida (§3 del prompt),
     pero se avisa con una anotación discreta en vez de silenciarlo.
@@ -69,20 +76,17 @@ def build_map_2d_figure(
         )
     )
 
-    if selected_signal_index is not None:
-        pos = np.where(indices == selected_signal_index)[0]
-        if pos.size > 0:
-            i = int(pos[0])
-            fig.add_trace(
-                go.Scattergl(
-                    x=[x[i]], y=[y[i]], mode="markers",
-                    marker=dict(
-                        size=HIGHLIGHT_MARKER_SIZE_2D, color=HIGHLIGHT_COLOR,
-                        symbol="circle-open", line=dict(width=2),
-                    ),
-                    hoverinfo="skip", showlegend=False, name="Seleccionada",
-                )
-            )
+    highlight = resolve_map_highlight_coords(dataset, selected_signal_index)
+    fig.add_trace(
+        go.Scattergl(
+            x=highlight["x"], y=highlight["y"], mode="markers",
+            marker=dict(
+                size=HIGHLIGHT_MARKER_SIZE_2D, color=HIGHLIGHT_COLOR,
+                symbol="circle-open", line=dict(width=2),
+            ),
+            hoverinfo="skip", showlegend=False, name="Seleccionada",
+        )
+    )
 
     lines: list[str] = []
     if x.shape[0] == 0:

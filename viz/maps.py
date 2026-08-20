@@ -120,3 +120,25 @@ def build_map_dataset(
         omitted_counts=omitted_counts,
         axis_labels=axis_labels,
     )
+
+
+def resolve_map_highlight_coords(dataset: MapDataset, selected_signal_index: int | None) -> dict[str, list]:
+    """Coordenadas de la traza de resaltado del mapa (§5.3 del prompt: la señal
+    seleccionada aparece resaltada en #4 y #5 simultáneamente): una fila si
+    ``selected_signal_index`` está presente en ``dataset.signal_indices`` (sin
+    filtrar/omitir), vacía si no -- sin selección, señal excluida por el filtrado, o con
+    NaN/inf en algún eje de este mapa.
+
+    Mismas claves que ``dataset.coords`` (``{"x","y"}`` o ``{"x","y","z"}``), para que el
+    llamador arme la traza de resaltado sin distinguir 2D de 3D. Reutilizada tanto por
+    la construcción inicial de la figura (``ui/components/graph_map_2d.py``,
+    ``graph_map_3d.py``) como por el parche ligero de navegación
+    (``ui/callbacks/sensor_window_callbacks.py::_on_refresh_map_highlight``) -- una sola
+    implementación de "dónde está la señal seleccionada dentro de este mapa".
+    """
+    if selected_signal_index is not None:
+        pos = np.where(dataset.signal_indices == selected_signal_index)[0]
+        if pos.size > 0:
+            i = int(pos[0])
+            return {axis: [float(values[i])] for axis, values in dataset.coords.items()}
+    return {axis: [] for axis in dataset.coords}

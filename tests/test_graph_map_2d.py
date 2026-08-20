@@ -29,7 +29,9 @@ def _dataset(x, y, signal_indices=None, omitted=None) -> MapDataset:
 def test_basic_scatter_one_trace_per_point():
     dataset = _dataset([1.0, 2.0, 3.0], [4.0, 5.0, 6.0])
     fig = build_map_2d_figure(dataset)
-    assert len(fig.data) == 1
+    # Dos trazas SIEMPRE: puntos + resaltado (vacía si no hay selección) -- ver
+    # docstring de build_map_2d_figure sobre por qué el conteo es constante.
+    assert len(fig.data) == 2
     trace = fig.data[0]
     assert trace.mode == "markers"
     assert np.array_equal(trace.x, [1.0, 2.0, 3.0])
@@ -62,18 +64,22 @@ def test_selected_signal_adds_highlight_trace():
     assert highlight.showlegend is False
 
 
-def test_selected_signal_not_in_map_adds_no_highlight():
+def test_selected_signal_not_in_map_leaves_highlight_trace_empty():
     # La señal seleccionada pudo quedar excluida del mapa (filtrada, o con NaN en algún
-    # eje) -- no debe fallar, simplemente no hay nada que resaltar.
+    # eje) -- no debe fallar, la traza de resaltado simplemente queda vacía.
     dataset = _dataset([1.0, 2.0], [4.0, 5.0], signal_indices=[10, 11])
     fig = build_map_2d_figure(dataset, selected_signal_index=999)
-    assert len(fig.data) == 1
+    assert len(fig.data) == 2
+    highlight = fig.data[1]
+    assert list(highlight.x) == [] and list(highlight.y) == []
 
 
-def test_no_selection_means_no_highlight_trace():
+def test_no_selection_leaves_highlight_trace_empty():
     dataset = _dataset([1.0, 2.0], [4.0, 5.0])
     fig = build_map_2d_figure(dataset)
-    assert len(fig.data) == 1
+    assert len(fig.data) == 2
+    highlight = fig.data[1]
+    assert list(highlight.x) == [] and list(highlight.y) == []
 
 
 def test_omitted_counts_produce_info_annotation():
@@ -99,7 +105,7 @@ def test_duplicate_axis_warning_adds_annotation():
 def test_empty_signal_set_shows_no_points_message():
     dataset = _dataset([], [])
     fig = build_map_2d_figure(dataset)
-    assert len(fig.data) == 1
+    assert len(fig.data) == 2
     assert len(fig.layout.annotations) == 1
     assert "Sin señales" in fig.layout.annotations[0].text
 

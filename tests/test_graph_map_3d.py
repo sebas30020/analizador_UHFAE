@@ -24,7 +24,9 @@ def _dataset(x, y, z, signal_indices=None, omitted=None) -> MapDataset:
 def test_basic_scatter3d_one_trace_per_point():
     dataset = _dataset([1.0, 2.0], [3.0, 4.0], [5.0, 6.0])
     fig = build_map_3d_figure(dataset)
-    assert len(fig.data) == 1
+    # Dos trazas SIEMPRE: puntos + resaltado (vacía si no hay selección) -- ver
+    # docstring de build_map_2d_figure sobre por qué el conteo es constante.
+    assert len(fig.data) == 2
     trace = fig.data[0]
     assert trace.type == "scatter3d"
     assert trace.mode == "markers"
@@ -56,10 +58,12 @@ def test_selected_signal_adds_highlight_trace():
     assert highlight.x[0] == 2.0 and highlight.y[0] == 4.0 and highlight.z[0] == 6.0
 
 
-def test_selected_signal_not_in_map_adds_no_highlight():
+def test_selected_signal_not_in_map_leaves_highlight_trace_empty():
     dataset = _dataset([1.0], [2.0], [3.0], signal_indices=[10])
     fig = build_map_3d_figure(dataset, selected_signal_index=999)
-    assert len(fig.data) == 1
+    assert len(fig.data) == 2
+    highlight = fig.data[1]
+    assert list(highlight.x) == [] and list(highlight.y) == [] and list(highlight.z) == []
 
 
 def test_duplicate_axis_warning_adds_annotation():
