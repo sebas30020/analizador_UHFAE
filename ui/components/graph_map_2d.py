@@ -29,12 +29,6 @@ from ui.components.graph_map_common import (
 )
 from viz.maps import MapDataset, resolve_map_highlight_coords
 
-# Índice de la traza de resaltado dentro de ``fig.data`` -- SIEMPRE la segunda traza
-# (ver docstring de ``build_map_2d_figure``), constante que reutiliza el parche ligero
-# de navegación (``ui/callbacks/sensor_window_callbacks.py::_on_refresh_map_highlight``)
-# para no tener que buscarla por nombre en cada patch.
-HIGHLIGHT_TRACE_INDEX = 1
-
 MAP_2D_HEIGHT = 420
 
 

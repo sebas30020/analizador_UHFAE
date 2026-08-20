@@ -16,6 +16,23 @@ POINT_COLOR = "#4A7BB0"
 HIGHLIGHT_COLOR = "#E8871E"
 ANNOTATION_COLOR = "#7A7A7A"
 
+# Disposición de trazas, idéntica en #4 y #5 y **contractual**: la traza 0 son los puntos
+# (una señal cada uno, alineados con ``MapDataset.signal_indices``) y la traza 1 es el
+# resaltado de la señal seleccionada, siempre presente aunque esté vacía.
+#
+# El orden importa fuera de estos componentes: los callbacks resuelven qué señal se
+# clicó/seleccionó con ``curveNumber`` + ``pointNumber``, NO con ``customdata``. Motivo
+# (bug real, no preferencia de estilo): plotly.py 6.x serializa los arrays de numpy como
+# typed arrays en base64 (``{"bdata": ..., "dtype": ...}``) en vez de listas, y el
+# ``filterEventData`` de ``dcc.Graph`` reconstruye el ``customdata`` de cada punto
+# indexando ``gd.data[curveNumber].customdata[pointNumber]`` -- indexar ese objeto con un
+# entero da ``undefined``, así que el punto llega al servidor SIN ``customdata``. El
+# tooltip sí lo muestra porque lo renderiza Plotly desde ``_fullData`` ya decodificado,
+# nunca pasa por Dash. ``curveNumber``/``pointNumber`` son números planos del propio
+# evento de Plotly y sobreviven el filtro intactos.
+POINTS_TRACE_INDEX = 0
+HIGHLIGHT_TRACE_INDEX = 1
+
 POINT_MARKER_SIZE_2D = 6
 POINT_MARKER_SIZE_3D = 3
 HIGHLIGHT_MARKER_SIZE_2D = 14

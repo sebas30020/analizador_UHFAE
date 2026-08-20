@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from core.grouping import Group
+from ui.callbacks.helpers import resolve_map_point_signal_index
 from ui.components.time_axis import elapsed_minutes_to_unix_seconds
 
 
@@ -80,27 +81,28 @@ def format_filter_status(active: int, total: int, n_ops: int) -> str:
     return f"{active}/{total} señales activas · {n_ops} filtro(s) aplicado(s)"
 
 
-def resolve_map_selection_signal_indices(selected_points: list[dict] | None) -> list[int]:
+def resolve_map_selection_signal_indices(
+    selected_points: list[dict] | None, signal_indices: np.ndarray
+) -> list[int]:
     """Índices globales de señal seleccionados con lazo/caja en el mapa 2D (#4,
-    ``archivos_md/prompt-mapas2d3d.md`` §5.4) -- vienen directo de ``customdata`` de
-    cada punto (sembrado en ``ui/components/graph_map_2d.py`` con
-    ``dataset.signal_indices``), sin buscar por timestamp como #1/#3: un punto del mapa
-    ya ES una señal, no hace falta resolver ninguna cercanía.
+    ``archivos_md/prompt-mapas2d3d.md`` §5.4).
 
-    La traza de resaltado (``HIGHLIGHT_TRACE_INDEX``) no trae ``customdata`` -- sus
-    puntos, si caen dentro del lazo, se descartan sin perder nada: la misma señal ya
-    aparece en la traza principal con su ``customdata`` real.
+    Cada punto se resuelve por posición contra ``signal_indices`` del ``MapDataset`` con
+    el que se dibujó el mapa (:func:`ui.callbacks.helpers.resolve_map_point_signal_index`),
+    no por ``customdata`` ni por cercanía de timestamp como #1/#3: un punto del mapa ya
+    ES una señal. El porqué de no usar ``customdata`` está en
+    ``ui/components/graph_map_common.py``.
+
+    Los puntos de la traza de resaltado que caigan dentro del lazo se descartan sin
+    perder nada: esa misma señal ya viene en la traza de puntos.
     """
     if not selected_points:
         return []
     seen: set[int] = set()
     result: list[int] = []
     for point in selected_points:
-        customdata = point.get("customdata")
-        if customdata is None:
-            continue
-        idx = int(customdata)
-        if idx not in seen:
+        idx = resolve_map_point_signal_index(point, signal_indices)
+        if idx is not None and idx not in seen:
             seen.add(idx)
             result.append(idx)
     return result

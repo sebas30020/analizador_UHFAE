@@ -37,11 +37,9 @@ from ui.callbacks.helpers import (
     resolve_sensor_availability_notice,
 )
 from ui.components.event_lines import build_event_line_shapes
-from ui.components.graph_map_2d import HIGHLIGHT_TRACE_INDEX as MAP_2D_HIGHLIGHT_TRACE_INDEX
 from ui.components.graph_map_2d import build_map_2d_figure
-from ui.components.graph_map_3d import HIGHLIGHT_TRACE_INDEX as MAP_3D_HIGHLIGHT_TRACE_INDEX
 from ui.components.graph_map_3d import build_map_3d_figure
-from ui.components.graph_map_common import build_empty_map_figure
+from ui.components.graph_map_common import HIGHLIGHT_TRACE_INDEX, build_empty_map_figure
 from ui.components.graph_metric import build_metric_figure
 from ui.components.graph_signal import build_signal_figure
 from ui.components.graph_timeseries import build_timeseries_figure
@@ -232,10 +230,16 @@ def register_callbacks(app: Dash) -> None:
             clicked_unix = elapsed_minutes_to_unix_seconds(float(points[0]["x"]), dataset.t0)
             click_target = state.nearest_index_for_timestamp(sensor, clicked_unix)
         elif triggered_kind == "graph-map":
-            # #4/#5 ya sembraron el índice global de señal como customdata de cada punto
-            # (viz/maps.py::MapDataset.signal_indices) -- exacto, sin buscar vecino más
-            # cercano por timestamp.
-            click_target = resolve_map_click_signal_index(ctx.triggered[0]["value"])
+            # Un punto de #4/#5 YA es una señal: se resuelve por posición dentro de la
+            # traza contra el MapDataset con el que se dibujó ese mapa (registro de
+            # proceso, ui/map_registry.py), sin buscar vecino más cercano por timestamp
+            # y sin depender de customdata -- ver ui/components/graph_map_common.py.
+            map_dataset = get_map_registry().get(triggered["index"])
+            if map_dataset is None:
+                raise PreventUpdate
+            click_target = resolve_map_click_signal_index(
+                ctx.triggered[0]["value"], map_dataset.signal_indices
+            )
             if click_target is None:
                 raise PreventUpdate
 
@@ -330,9 +334,12 @@ def register_callbacks(app: Dash) -> None:
                 # archivos_md/PLAN_MAPAS_2D_3D.md) -- en la práctica Plotly nunca
                 # dispara selectedData sobre una escena 3D, esto es solo defensivo.
                 raise PreventUpdate
+            map_dataset = get_map_registry().get(triggered["index"])
+            if map_dataset is None:
+                raise PreventUpdate
             selected_data = ctx.triggered[0]["value"]
             points = (selected_data or {}).get("points") or []
-            return resolve_map_selection_signal_indices(points)
+            return resolve_map_selection_signal_indices(points, map_dataset.signal_indices)
 
         if isinstance(triggered, dict) and triggered.get("type") == "graph-metric":
             regimen, _metric_id = decode_metric_option(triggered["index"])
@@ -792,10 +799,9 @@ def register_callbacks(app: Dash) -> None:
             map_dataset = registry.get(map_id["index"])
             patch = Patch()
             if map_dataset is not None:
-                highlight_index = MAP_2D_HIGHLIGHT_TRACE_INDEX if map_id["index"] == "2d" else MAP_3D_HIGHLIGHT_TRACE_INDEX
                 highlight = resolve_map_highlight_coords(map_dataset, selected)
                 for axis, values in highlight.items():
-                    patch["data"][highlight_index][axis] = values
+                    patch["data"][HIGHLIGHT_TRACE_INDEX][axis] = values
             patches.append(patch)
         return patches
 

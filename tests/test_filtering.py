@@ -125,27 +125,43 @@ def test_resolve_puntual_selection_indices_empty_selection():
 
 
 # --- resolve_map_selection_signal_indices (lazo/caja en el mapa 2D, #4) ----------------
+#
+# Igual que el click: por curveNumber+pointNumber, nunca por customdata (ver
+# ui/components/graph_map_common.py). Payloads con la forma real del navegador.
 
-def test_resolve_map_selection_signal_indices_reads_customdata_directly():
-    selected_points = [{"customdata": 40, "x": 0.1, "y": 0.2}, {"customdata": 12, "x": 0.3, "y": 0.4}]
-    assert resolve_map_selection_signal_indices(selected_points) == [40, 12]
+_MAP_SIGNAL_INDICES = np.array([40, 12, 7, 5, 9])
+
+
+def test_resolve_map_selection_signal_indices_maps_positions_to_signal_indices():
+    selected_points = [
+        {"curveNumber": 0, "pointNumber": 0, "x": 0.1, "y": 0.2},
+        {"curveNumber": 0, "pointNumber": 1, "x": 0.3, "y": 0.4},
+    ]
+    assert resolve_map_selection_signal_indices(selected_points, _MAP_SIGNAL_INDICES) == [40, 12]
 
 
 def test_resolve_map_selection_signal_indices_dedupes_preserving_first_occurrence_order():
-    selected_points = [{"customdata": 5}, {"customdata": 9}, {"customdata": 5}]
-    assert resolve_map_selection_signal_indices(selected_points) == [5, 9]
+    selected_points = [
+        {"curveNumber": 0, "pointNumber": 3},
+        {"curveNumber": 0, "pointNumber": 4},
+        {"curveNumber": 0, "pointNumber": 3},
+    ]
+    assert resolve_map_selection_signal_indices(selected_points, _MAP_SIGNAL_INDICES) == [5, 9]
 
 
-def test_resolve_map_selection_signal_indices_skips_points_without_customdata():
-    # Puntos de la traza de resaltado (sin customdata) que caen dentro del lazo -- se
-    # descartan sin perder la señal, que ya viene en la traza principal.
-    selected_points = [{"x": 0.1, "y": 0.2}, {"customdata": 7, "x": 0.3, "y": 0.4}]
-    assert resolve_map_selection_signal_indices(selected_points) == [7]
+def test_resolve_map_selection_signal_indices_skips_highlight_trace_points():
+    # Puntos de la traza de resaltado (curveNumber=1) que caen dentro del lazo -- se
+    # descartan sin perder la señal, que ya viene en la traza de puntos.
+    selected_points = [
+        {"curveNumber": 1, "pointNumber": 0},
+        {"curveNumber": 0, "pointNumber": 2},
+    ]
+    assert resolve_map_selection_signal_indices(selected_points, _MAP_SIGNAL_INDICES) == [7]
 
 
 def test_resolve_map_selection_signal_indices_empty_selection():
-    assert resolve_map_selection_signal_indices([]) == []
-    assert resolve_map_selection_signal_indices(None) == []
+    assert resolve_map_selection_signal_indices([], _MAP_SIGNAL_INDICES) == []
+    assert resolve_map_selection_signal_indices(None, _MAP_SIGNAL_INDICES) == []
 
 
 # --- format_filter_status ---------------------------------------------------------------

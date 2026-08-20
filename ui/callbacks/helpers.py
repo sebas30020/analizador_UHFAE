@@ -7,6 +7,8 @@ from typing import Callable
 
 import numpy as np
 
+from ui.components.graph_map_common import POINTS_TRACE_INDEX
+
 
 def parse_compare_indices(text: str | None, n_total: int, exclude: int | None = None) -> list[int]:
     """Parsea "450,451,452" a una lista de índices válidos (dentro de rango, sin
@@ -152,33 +154,56 @@ def resolve_nav_index(
     return clamp_index(int(target), n_total)
 
 
-def resolve_map_click_signal_index(click_data: dict | None) -> int | None:
+def resolve_map_point_signal_index(point: dict, signal_indices: np.ndarray) -> int | None:
+    """Índice global de señal de UN punto de evento de un mapa #4/#5, resuelto por
+    posición (``curveNumber`` + ``pointNumber``) contra ``signal_indices`` del
+    ``MapDataset`` con el que se dibujó ese mapa.
+
+    **No usa ``customdata``, a propósito.** Los mapas sí lo siembran (lo necesita el
+    tooltip), pero nunca llega al servidor: ver la nota de
+    ``ui/components/graph_map_common.py`` sobre el typed array en base64 de plotly.py 6.x
+    y el ``filterEventData`` de ``dcc.Graph``. ``curveNumber``/``pointNumber`` son
+    números planos del evento de Plotly y sobreviven ese filtro intactos.
+
+    ``None`` (no es un error, es "no hay nada que hacer con este punto") cuando:
+
+    - el punto pertenece a la traza de resaltado y no a la de puntos -- clicar sobre la
+      señal que ya está seleccionada no debe navegar a ninguna parte;
+    - el evento no trae posición de punto utilizable;
+    - la posición cae fuera de ``signal_indices``, que solo puede pasar si la figura y el
+      registro quedaron momentáneamente desincronizados (mapa recién recalculado por un
+      filtro nuevo, con un evento en vuelo del dibujo anterior). Descartar el punto es
+      correcto: navegar con un índice de la generación anterior llevaría a una señal
+      distinta de la que el usuario clicó.
+    """
+    if point.get("curveNumber") != POINTS_TRACE_INDEX:
+        return None
+    position = point.get("pointNumber")
+    if position is None:
+        position = point.get("pointIndex")
+    if position is None:
+        return None
+    position = int(position)
+    if position < 0 or position >= signal_indices.shape[0]:
+        return None
+    return int(signal_indices[position])
+
+
+def resolve_map_click_signal_index(click_data: dict | None, signal_indices: np.ndarray) -> int | None:
     """Índice global de señal del punto clicado en el mapa 2D o 3D (#4/#5,
     ``archivos_md/prompt-mapas2d3d.md`` §5.1).
 
     A diferencia de las gráficas #1/#3 (que dibujan minutos transcurridos y necesitan
-    ``AppState.nearest_index_for_timestamp`` para volver al índice de señal), los mapas
-    ya sembraron el índice global de señal como ``customdata`` de cada punto
-    (``ui/components/graph_map_2d.py``, ``graph_map_3d.py``) -- viene exacto, sin
-    búsqueda por vecino más cercano.
-
-    ``None`` si no hay puntos clicados o si el punto clicado no trae ``customdata`` (la
-    traza de resaltado, ``HIGHLIGHT_TRACE_INDEX``, no lo tiene -- clicar sobre la propia
-    señal ya seleccionada no debe hacer nada, no es un error).
+    ``AppState.nearest_index_for_timestamp`` para volver al índice de señal), aquí un
+    punto YA es una señal: basta traducir su posición dentro de la traza. Ver
+    :func:`resolve_map_point_signal_index`.
     """
     if not click_data:
         return None
     points = click_data.get("points") or []
     if not points:
         return None
-    customdata = points[0].get("customdata")
-    if customdata is None:
-        return None
-    if isinstance(customdata, (list, tuple)):
-        if not customdata:
-            return None
-        customdata = customdata[0]
-    return int(customdata)
+    return resolve_map_point_signal_index(points[0], signal_indices)
 
 
 VALID_SENSORS = ("UHF", "AE", "UHF_KS")

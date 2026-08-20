@@ -214,25 +214,45 @@ def test_resolve_map_axis_status_all_assigned_with_duplicate():
 
 
 # --- resolve_map_click_signal_index (click en #4/#5 -> Gráfica #2) ---
+#
+# Se resuelve por curveNumber+pointNumber, NUNCA por customdata: Dash no lo entrega
+# cuando plotly.py serializa el array como typed array en base64 (ver
+# ui/components/graph_map_common.py). Estas pruebas usan payloads con la forma REAL que
+# llega del navegador -- sin customdata.
 
-def test_resolve_map_click_signal_index_reads_customdata():
-    click_data = {"points": [{"x": 1.2, "y": 3.4, "customdata": 4821}]}
-    assert resolve_map_click_signal_index(click_data) == 4821
+_SIGNAL_INDICES = np.array([10, 4821, 77, 3])
 
 
-def test_resolve_map_click_signal_index_handles_customdata_as_single_element_list():
-    # Plotly serializa customdata escalar como lista de un elemento en algunos casos.
-    click_data = {"points": [{"customdata": [4821]}]}
-    assert resolve_map_click_signal_index(click_data) == 4821
+def test_resolve_map_click_signal_index_maps_point_position_to_signal_index():
+    click_data = {"points": [{"curveNumber": 0, "pointNumber": 1, "x": 1.2, "y": 3.4}]}
+    assert resolve_map_click_signal_index(click_data, _SIGNAL_INDICES) == 4821
+
+
+def test_resolve_map_click_signal_index_accepts_point_index_alias():
+    # Algunos tipos de traza reportan pointIndex en vez de pointNumber.
+    click_data = {"points": [{"curveNumber": 0, "pointIndex": 2}]}
+    assert resolve_map_click_signal_index(click_data, _SIGNAL_INDICES) == 77
+
+
+def test_resolve_map_click_signal_index_ignores_highlight_trace():
+    # curveNumber=1 es la traza de resaltado -- clicar sobre la señal ya seleccionada
+    # no debe navegar a ninguna parte, no es un error.
+    click_data = {"points": [{"curveNumber": 1, "pointNumber": 0}]}
+    assert resolve_map_click_signal_index(click_data, _SIGNAL_INDICES) is None
 
 
 def test_resolve_map_click_signal_index_no_points_returns_none():
-    assert resolve_map_click_signal_index({"points": []}) is None
-    assert resolve_map_click_signal_index(None) is None
-    assert resolve_map_click_signal_index({}) is None
+    assert resolve_map_click_signal_index({"points": []}, _SIGNAL_INDICES) is None
+    assert resolve_map_click_signal_index(None, _SIGNAL_INDICES) is None
+    assert resolve_map_click_signal_index({}, _SIGNAL_INDICES) is None
 
 
-def test_resolve_map_click_signal_index_missing_customdata_returns_none():
-    # La traza de resaltado no trae customdata -- clicar sobre la señal ya seleccionada
-    # no debe hacer nada, no es un error.
-    assert resolve_map_click_signal_index({"points": [{"x": 1.0, "y": 2.0}]}) is None
+def test_resolve_map_click_signal_index_without_position_returns_none():
+    assert resolve_map_click_signal_index({"points": [{"curveNumber": 0}]}, _SIGNAL_INDICES) is None
+
+
+def test_resolve_map_click_signal_index_out_of_range_returns_none():
+    # Figura y registro desincronizados (evento en vuelo del dibujo anterior): descartar
+    # es correcto, navegar con un índice de la generación previa sería peor.
+    click_data = {"points": [{"curveNumber": 0, "pointNumber": 999}]}
+    assert resolve_map_click_signal_index(click_data, _SIGNAL_INDICES) is None

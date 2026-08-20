@@ -31,11 +31,6 @@ from ui.components.graph_map_common import (
 )
 from viz.maps import MapDataset, resolve_map_highlight_coords
 
-# Misma convención que ``graph_map_2d.HIGHLIGHT_TRACE_INDEX``: la traza de resaltado es
-# SIEMPRE la segunda (índice 1), para que el parche ligero de navegación
-# (``_on_refresh_map_highlight``) no tenga que buscarla por nombre.
-HIGHLIGHT_TRACE_INDEX = 1
-
 MAP_3D_HEIGHT = 480
 
 
