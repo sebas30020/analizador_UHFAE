@@ -89,6 +89,20 @@ de señal global de cada punto se puede derivar una sola vez con esa misma másc
 6. **Documentación y medición**: `README.md`, `docs/ARQUITECTURA.md`, nota de entrega
    `archivos_md/MAPAS_2D_3D_ENTREGA.md`, benchmark sobre el dataset real.
 
+## Estado final
+
+Las seis etapas están completas. El resultado, las decisiones tal como quedaron y la
+verificación se documentan en [MAPAS_2D_3D_ENTREGA.md](MAPAS_2D_3D_ENTREGA.md) — este
+documento queda como bitácora de lo que se planeó, no se edita para reflejar lo que se
+construyó.
+
+Lo que el plan no anticipó: dos bugs de identificación de puntos que solo aparecieron al
+usar la interfaz de verdad, ambos con las pruebas de la rama en verde (§3 de la entrega).
+El primero, específico de esta rama, era que `customdata` nunca llega al servidor con
+plotly.py 6.x. El segundo, preexistente desde la Fase 6, era que el lazo de la gráfica #1
+ignoraba la amplitud y filtraba por franja temporal. Los dos comparten la misma lección:
+identificar un punto de Plotly por posición, no por datos adjuntos.
+
 Controles del panel lateral que los mapas **no leen** (globales, dependientes del eje
 temporal o del agrupamiento): `show-reference-line`, `reference-line-t`,
 `smooth-puntual`, `smooth-grupo`, `smoothing-method`, `smoothing-window`,

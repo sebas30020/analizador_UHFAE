@@ -58,22 +58,50 @@ De arriba abajo:
    evento. Aquí no hay diezmado: se dibuja un segmento por señal, sean 12 000 o 20 000.
 3. **Gráficas de métricas** (tipo #3): una por cada métrica que se agregue desde el
    selector del panel lateral, apiladas con scroll de página.
+4. **Mapas de separación** (tipos #4 y #5), siempre al final: ver abajo.
 
 En el panel lateral se eligen las métricas, el reductor de grupo (mediana, media,
-percentil), el criterio de agrupamiento (por ventana temporal o por cantidad de señales)
-y los controles de filtrado.
+percentil), el criterio de agrupamiento (por ventana temporal o por cantidad de señales),
+los ejes de los mapas y los controles de filtrado.
+
+### Mapas de separación
+
+Dos gráficas donde **un punto es una señal**, no una serie en el tiempo: sus coordenadas
+son los valores de dos (mapa **2D**, tipo #4) o tres (mapa **3D**, tipo #5) métricas
+cualesquiera para esa señal — los mismos valores que ya se ven en las gráficas de
+métricas. Sirven para ver si distintos tipos de descarga se separan en el espacio de dos o
+tres métricas.
+
+Cada mapa se habilita con su propio checkbox y tiene sus propios selectores de eje; los
+ejes ofrecen solo métricas **puntuales**, que son las que dan un valor por señal.
+Deshabilitado no consume cómputo, pero conserva los ejes elegidos. Los mapas quedan
+siempre debajo de las gráficas de métricas: agregar una métrica los empuja hacia abajo,
+nunca al revés.
+
+Al hacer clic en un punto, esa señal se dibuja en la gráfica #2 y queda resaltada en
+ambos mapas a la vez. Si una señal no tiene valor finito para alguno de los ejes elegidos
+se omite del mapa, y una nota discreta dice cuántas.
 
 ### Filtrado cruzado
 
-Selecciona con el lazo o el rectángulo de Plotly sobre la gráfica #1 o sobre cualquier
-gráfica #3, y confirma con **"Filtrar selección"**. La exclusión se propaga a todas las
-gráficas de ese sensor a la vez: hay una sola máscara por sensor, y todas las vistas se
-derivan de ella. *Deshacer* y *Rehacer* recorren el historial; *Restablecer todo* es un
-borrón y cuenta nueva no deshacible. El indicador permanente muestra cuántas señales
-siguen activas y cuántos filtros hay aplicados. UHF y AE nunca comparten máscara.
+Selecciona con el lazo o el rectángulo de Plotly sobre la gráfica #1, sobre cualquier
+gráfica #3 o sobre el mapa 2D, y confirma con **"Filtrar selección"**. La exclusión se
+propaga a todas las gráficas de ese sensor a la vez: hay una sola máscara por sensor, y
+todas las vistas se derivan de ella. *Deshacer* y *Rehacer* recorren el historial;
+*Restablecer todo* es un borrón y cuenta nueva no deshacible. El indicador permanente
+muestra cuántas señales siguen activas y cuántos filtros hay aplicados. UHF y AE nunca
+comparten máscara.
 
 Seleccionar sobre una gráfica de métrica **de grupo** excluye todas las señales del
 grupo, no solo la más cercana al clic.
+
+El **mapa 3D no participa del filtrado por selección**: Plotly no ofrece lazo ni caja
+dentro de una escena 3D. Sí responde al clic, igual que el 2D.
+
+En la gráfica #1 la selección se resuelve **señal a señal**, respetando también la
+amplitud: cada señal es un segmento vertical, y basta con que el lazo alcance uno de sus
+dos extremos para incluirla. Un lazo que cruce el centro de un segmento sin tocar ninguno
+de sus extremos no lo selecciona — Plotly solo conoce los vértices que dibuja.
 
 ---
 
@@ -89,6 +117,7 @@ grupo, no solo la más cercana al clic.
 | [archivos_md/esquema_keysight_h5.md](archivos_md/esquema_keysight_h5.md) | Esquema del formato Keysight en memoria segmentada (sensor `UHF_KS`) |
 | [archivos_md/LECTURA_KEYSIGHT_ENTREGA.md](archivos_md/LECTURA_KEYSIGHT_ENTREGA.md) | Lectura de bases de datos Keysight: decisiones, implementación y verificación |
 | [archivos_md/AUTOPLAY_ENTREGA.md](archivos_md/AUTOPLAY_ENTREGA.md) | Auto-play de la gráfica #2: navegación consciente del filtrado, control de velocidad, verificación |
+| [archivos_md/MAPAS_2D_3D_ENTREGA.md](archivos_md/MAPAS_2D_3D_ENTREGA.md) | Mapas de separación #4/#5: decisiones, dos bugs de identificación de puntos encontrados en uso, rendimiento |
 | `PROMPT_Analizador_Señales_UHF_AE.md` | Especificación maestra del proyecto |
 
 ## Desarrollo
