@@ -18,7 +18,7 @@ from dash import dcc, html
 
 from core.models import SensorName
 from ui.callbacks.filtering import format_filter_status
-from ui.callbacks.helpers import VALID_SENSORS
+from ui.callbacks.helpers import VALID_SENSORS, resolve_sensor_availability_notice
 from ui.components.control_panel import build_control_panel
 from ui.components.metadata_panel import build_metadata_panel
 from ui.state import get_state
@@ -33,6 +33,8 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
     initial_db_label = str(dataset.source_path) if dataset is not None else "Ningún archivo cargado"
     other_sensors = [s for s in VALID_SENSORS if s != sensor]
     initial_filter_status = format_filter_status(*state.get_filter_counts(sensor))
+    sensor_has_signals = dataset is not None and sensor in dataset.blocks and dataset.blocks[sensor].data.shape[0] > 0
+    initial_notice = resolve_sensor_availability_notice(sensor, dataset is not None, sensor_has_signals)
 
     return html.Div(
         className="sensor-window",
@@ -68,6 +70,11 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
                 className="panel-central",
                 children=[
                     html.H3(f"Sensor: {sensor}"),
+                    html.Div(
+                        id="sensor-availability-notice",
+                        children=initial_notice or "",
+                        className="sensor-empty-notice" if initial_notice else "sensor-empty-notice hidden",
+                    ),
 
                     # Orden vertical (Fase 7): señal individual arriba, envolvente global
                     # debajo y las métricas apiladas al final.

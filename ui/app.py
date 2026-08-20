@@ -54,6 +54,9 @@ input, .Select-control { background:#FFFFFF; color:#23262D; border:1px solid #D3
 .metrics-graph-error { padding:14px 16px; color:#8A2C1E; background:#FDEDEA; border-color:#F3C7BE; }
 .filter-status { font-size:12px; color:#5B6472; margin:4px 0 8px 0; }
 .filter-buttons { display:flex; flex-wrap:wrap; gap:6px; }
+.sensor-empty-notice { background:#FDF6E8; border:1px solid #E9D9A8; color:#8A6A0A; border-radius:6px;
+                        padding:8px 12px; font-size:13px; margin-bottom:4px; }
+.sensor-empty-notice.hidden { display:none; }
 """
 
 

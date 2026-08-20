@@ -8,13 +8,25 @@ implica escribir una nueva implementación de :class:`OriginReader`, sin tocar n
 """
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterator
 
 import numpy as np
 
 from core.models import EnvironmentalSeries, EventSeries, SensorName
+
+
+def stable_file_dataset_id(path: str | Path) -> str:
+    """``ruta:tamaño:mtime_ns`` -- estable mientras el archivo no cambie, barato de
+    calcular (evita hashear archivos de cientos de MB en cada apertura). Compartido por
+    todos los readers basados en un único archivo local, para no duplicar la fórmula.
+    """
+    path = Path(path)
+    stat = os.stat(path)
+    return f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}"
 
 
 @dataclass
@@ -62,6 +74,27 @@ class OriginReader(ABC):
     @abstractmethod
     def get_experiment_attrs(self, experiment: str) -> dict:
         """Metadatos del experimento (fecha, duración de chunk, descripción, versión...)."""
+
+    @abstractmethod
+    def available_sensors(self) -> list[SensorName]:
+        """Sensores que este origen puede entregar (rama ``lectura_keysight``).
+
+        No todo origen trae los mismos sensores -- ``HDF5Reader`` ofrece ``UHF``/``AE``,
+        un origen Keysight en memoria segmentada solo ofrece un canal de antena. El
+        llamador (``ui/state.py::load_dataset``) usa esto para no pedir lotes a sensores
+        que el origen no tiene, en vez de recibir bloques vacíos silenciosos.
+        """
+
+    def sensor_config_overrides(self, experiment: str, sensor: SensorName) -> dict:
+        """Valores de :class:`~core.models.SensorConfig` que este origen conoce mejor
+        que el YAML estático (p. ej. ``fs_hz``/``n_samples`` leídos de los atributos
+        reales del archivo, rama ``lectura_keysight``).
+
+        Por defecto no hay overrides -- ninguna dimensión temporal del esquema HDF5
+        actual varía por archivo, así que ``HDF5Reader`` no necesita implementar esto.
+        Las claves devueltas deben ser nombres de campo válidos de ``SensorConfig``.
+        """
+        return {}
 
     @abstractmethod
     def iter_signal_batches(self, experiment: str, sensor: SensorName) -> Iterator[RawSignalBatch]:

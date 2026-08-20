@@ -1,8 +1,12 @@
 # Analizador de Señales UHF / AE
 
 Herramienta local de un solo usuario para análisis de descargas parciales. Dash + Python
-3.13 sobre Windows. Dos sensores con escalas temporales muy distintas: **UHF** (3 GS/s,
-3000 muestras = 1 µs por traza) y **AE** (100 kS/s, 10 000 muestras = 100 ms).
+3.13 sobre Windows. Tres sensores con escalas temporales muy distintas: **UHF** (3 GS/s,
+3000 muestras = 1 µs por traza), **AE** (100 kS/s, 10 000 muestras = 100 ms) y **UHF_KS**
+(osciloscopio Keysight en memoria segmentada, 20 GS/s, 20 000 muestras = 1 µs por traza,
+rama `lectura_keysight`). Dos formatos de origen reconocidos por contenido, no por
+extensión (`data/readers/factory.py`): ver `archivos_md/esquema_med_5_ago_3.md` y
+`archivos_md/esquema_keysight_h5.md`.
 
 La documentación de este repo es buena y está al día — **léela antes de tocar código**, no
 la repitas aquí:
@@ -44,6 +48,11 @@ ruidosamente. `docs/ARQUITECTURA.md` explica el porqué de cada una.
   `core/normalization.py`. Si cambia la regla, sube su versión: eso invalida el caché solo.
 - **La clave de caché debe cubrir todo lo que altera el resultado.** Si agregas un parámetro
   que cambia el valor calculado y no entra en `cache/keys.py`, sirves resultados viejos.
+  Excepción deliberada: `fs_hz`/`n_samples` **no** están en la clave aunque algunos
+  orígenes (Keysight en memoria segmentada, `data/readers/keysight_reader.py`) los
+  varíen por archivo vía `OriginReader.sensor_config_overrides()` — no hace falta,
+  porque `dataset_id` (`ruta:tamaño:mtime_ns`) ya identifica el archivo 1 a 1, así que
+  dos configuraciones efectivas distintas nunca comparten clave.
 - **El caché almacena siempre el conjunto completo de señales, nunca un subconjunto
   filtrado.** El régimen de grupo hace bypass total del caché a propósito; escribir ahí el
   resultado filtrado envenena la vista sin filtro.

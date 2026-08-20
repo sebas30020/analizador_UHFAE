@@ -12,8 +12,9 @@ ninguna mantiene su propio estado de filtrado.
 """
 from __future__ import annotations
 
+import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,9 @@ from cache.backend import SqliteHdf5CacheBackend
 from cache.warmup import default_warmup_specs, start_background_warmup
 from core.models import EnvironmentalSeries, EventSeries, SensorConfig, SensorName, SignalBlock, load_sensor_configs
 from data.ingest import ingest_experiment
-from data.readers.hdf5_reader import HDF5Reader
+from data.readers.factory import open_reader
+
+_logger = logging.getLogger("analizador.ui.state")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SENSORS_CONFIG_PATH = PROJECT_ROOT / "config" / "sensors.yaml"
@@ -101,15 +104,40 @@ class AppState:
         self._filter_version = 0
 
     def load_dataset(self, path: str | Path) -> LoadedDataset:
-        """Ingiere un archivo `.hdf5` de origen (§10 supuesto #6 de FASE0: un archivo =
-        un experimento independiente) y lo deja como dataset activo."""
+        """Ingiere un archivo de origen (§10 supuesto #6 de FASE0: un archivo = un
+        experimento independiente) y lo deja como dataset activo.
+
+        El formato del archivo (esquema con chunks, o Keysight en memoria segmentada,
+        rama ``lectura_keysight``) se detecta por contenido en ``open_reader`` -- este
+        método no sabe cuál es, solo habla con la interfaz ``OriginReader`` (§10.3,
+        prueba de fuego #3 del PROMPT maestro).
+        """
         sensor_configs = load_sensor_configs(self._sensors_config_path)
-        with HDF5Reader(path) as reader:
+        with open_reader(path) as reader:
             experiments = reader.list_experiments()
             if not experiments:
                 raise ValueError(f"El archivo no contiene ningún experimento: {path}")
             experiment = experiments[0]
-            result = ingest_experiment(reader, experiment, list(sensor_configs.keys()))
+
+            # Solo se ingieren los sensores que este origen realmente ofrece -- un
+            # archivo Keysight no tiene AE, y viceversa (§4.4 del plan): sin este
+            # filtro, ingest_experiment pediría lotes a sensores inexistentes y
+            # produciría bloques vacíos silenciosos en vez de simplemente no aparecer.
+            sensores_disponibles = [s for s in sensor_configs if s in reader.available_sensors()]
+            result = ingest_experiment(reader, experiment, sensores_disponibles)
+
+            # El YAML documenta el valor nominal; el archivo puede aportar el efectivo
+            # (p. ej. fs_hz/n_samples reales de una adquisición Keysight, §4.3 del
+            # plan) -- se resuelve aquí, una sola vez por carga, no en cada cálculo.
+            for sensor in sensores_disponibles:
+                overrides = reader.sensor_config_overrides(experiment, sensor)
+                if overrides:
+                    effective = replace(sensor_configs[sensor], **overrides)
+                    if effective != sensor_configs[sensor]:
+                        _logger.info(
+                            "Perfil efectivo de %s (dataset %s): %s", sensor, reader.dataset_id, overrides
+                        )
+                    sensor_configs = {**sensor_configs, sensor: effective}
 
         dataset = LoadedDataset(
             dataset_id=result.dataset_id,

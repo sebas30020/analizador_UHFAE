@@ -40,7 +40,7 @@ from core.models import EnvironmentalSeries, EventSeries, IngestResult, SensorCo
 
 SCHEMA_VERSION = 1
 _GZIP_LEVEL = 4
-_ALL_SENSORS: tuple[SensorName, ...] = ("UHF", "AE")
+_ALL_SENSORS: tuple[SensorName, ...] = ("UHF", "AE", "UHF_KS")
 
 
 def write_canonical(

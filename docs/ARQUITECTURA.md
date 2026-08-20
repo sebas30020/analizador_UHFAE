@@ -153,22 +153,60 @@ de la interfaz se puebla desde el mismo registro. **Cero cambios** en `engine.py
 ### 8.2 Agregar un tercer sensor → una entrada en el YAML
 
 Los perfiles de sensor viven en `config/sensors.yaml` (`fs_hz`, `n_samples`,
-`freq_limit_hz`, unidad del eje, presupuesto de bloque). Ninguna dimensión temporal está
-cableada en el código: todo módulo que necesite `fs`/`M` lo lee de `SensorConfig`. La
-ventana de sensor está parametrizada por nombre de sensor y los callbacks se registran una
-sola vez, así que un tercer sensor no duplica lógica de ventana — necesita su entrada en
-el YAML y su grupo correspondiente en el archivo de origen.
+`freq_limit_hz`, unidad del eje, presupuesto de bloque, `decimate_full_view`,
+`has_trigger_metadata`). Ninguna dimensión temporal está cableada en el código: todo
+módulo que necesite `fs`/`M` lo lee de `SensorConfig`. La ventana de sensor está
+parametrizada por nombre de sensor y los callbacks se registran una sola vez, así que un
+tercer sensor no duplica lógica de ventana — necesita su entrada en el YAML y su grupo
+correspondiente en el archivo de origen.
 
-Lo que **sí** haría falta tocar: `VALID_SENSORS` en `ui/callbacks/helpers.py`, que hoy
-enumera los sensores válidos para el ruteo. Es la única lista cerrada que queda.
+Ya no es hipotético: la rama `lectura_keysight` (`archivos_md/PLAN_LECTURA_KEYSIGHT.md`)
+agregó `UHF_KS` (osciloscopio Keysight en memoria segmentada, ver
+`archivos_md/esquema_keysight_h5.md`) sin tocar `metrics/`, `core/normalization.py` ni
+`core/grouping.py`. Lo que sí hizo falta tocar, además del YAML:
+
+- `VALID_SENSORS` en `ui/callbacks/helpers.py` — la única lista cerrada de sensores que
+  queda, para el ruteo `/sensor/<nombre>`.
+- El literal de diezmado de la gráfica #2 (`ui/components/graph_signal.py`), que antes
+  comparaba `sensor_config.name == "AE"` — ahora lee `SensorConfig.decimate_full_view`,
+  porque un tercer sensor con más muestras que píxeles necesita el mismo tratamiento que
+  AE sin que el nombre "AE" quede cableado en la capa de presentación.
+- Un aviso en la ventana de sensor cuando el dataset cargado no trae señales de ese
+  sensor (`ui/callbacks/helpers.py::resolve_sensor_availability_notice`) — con tres
+  sensores posibles y cada origen entregando solo un subconjunto, una ventana vacía sin
+  explicación es indistinguible de un error.
+
+Lo que **no** cambió: ningún callback de navegación, filtrado, agrupamiento, línea de
+referencia o suavizado — todos resuelven el sensor en tiempo de render leyendo el Store
+`page-sensor`, así que un sensor nuevo los hereda sin código adicional.
 
 ### 8.3 Cambiar el motor de la base de datos origen → un lector nuevo
 
 `data/readers/base.py` define la interfaz `OriginReader` (iterar lotes de señales,
-ambientales, eventos, atributos del experimento, `dataset_id`). `HDF5Reader` es una
-implementación. Un origen distinto (Parquet, TDMS, un servicio remoto) implementa esa
-interfaz y se inyecta en `ingest_experiment`, que solo habla con la abstracción. **Cero
-cambios** aguas arriba de la capa de datos.
+ambientales, eventos, atributos del experimento, `dataset_id`, y desde la rama
+`lectura_keysight` también `available_sensors()` y `sensor_config_overrides()`).
+`HDF5Reader` y `KeysightSegmentedReader` son dos implementaciones con esquemas de origen
+completamente distintos (una con chunks/ambientales/eventos, la otra memoria segmentada
+sin ninguno de los dos). Un origen distinto (Parquet, TDMS, un servicio remoto) implementa
+la misma interfaz y se inyecta en `ingest_experiment`, que solo habla con la abstracción.
+**Cero cambios** aguas arriba de la capa de datos.
+
+`data/readers/factory.py::open_reader` es la pieza nueva que faltaba para que esto
+funcionara con **dos orígenes simultáneos** en el mismo proceso: ambos formatos usan
+indistintamente `.h5`/`.hdf5`, así que la elección de lector es por *sniffing* de
+contenido (¿existe `FileType/KeysightH5FileType`? ¿hay un grupo raíz con subgrupos
+`chunk_*`?), no por extensión. Es el único punto de la capa de presentación que sabe que
+existe más de un formato de origen — `ui/state.py::load_dataset` llama a `open_reader` y
+a partir de ahí solo habla con `OriginReader`.
+
+Dos consecuencias de tener sensores con `fs_hz`/`n_samples` que varían por archivo (algo
+que no existía antes de esta rama): `available_sensors()` evita que `ingest_experiment`
+pida lotes a un sensor que el origen no tiene, y `sensor_config_overrides()` permite que
+el archivo aporte el valor efectivo por encima del nominal del YAML — resuelto una sola
+vez al cargar, nunca en cada cálculo. `dataset_id` (`ruta:tamaño:mtime_ns`) sigue
+identificando el archivo 1 a 1, así que no hay riesgo de que la clave de caché mezcle
+resultados de dos configuraciones distintas aunque `fs_hz`/`n_samples` no formen parte de
+esa clave.
 
 ## 9. Decisiones que conviene conocer antes de tocar el código
 

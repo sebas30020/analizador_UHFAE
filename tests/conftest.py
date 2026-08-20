@@ -110,3 +110,84 @@ def synthetic_hdf5(tmp_path: Path) -> Path:
         hum2.create_dataset("humidity", data=np.array([42.0]))
 
     return path
+
+
+# --- Fixtures Keysight (rama lectura_keysight) ---------------------------------------
+#
+# ``_write_keysight_file`` replica el esquema real de osciloscopio Keysight en memoria
+# segmentada (archivos_md/esquema_keysight_h5.md), con los mismos casos borde deliberados
+# que el fixture ``synthetic_hdf5`` de arriba, en la misma línea:
+# - Segmentos numerados 1..12: el orden ALFABÉTICO de sus nombres ("Seg1", "Seg10",
+#   "Seg11", "Seg12", "Seg2", ...) contradice el orden CRONOLÓGICO/numérico -- exactamente
+#   la trampa verificada en los archivos reales de D:\data\data\main\ruido\ (ver
+#   archivos_md/PLAN_LECTURA_KEYSIGHT.md §1), reproducida aquí a propósito.
+# - Valores int16 conocidos por segmento (``raw = n``), para verificar la conversión
+#   ``v = raw*YInc + YOrg`` de forma exacta, no aproximada.
+KEYSIGHT_NUM_POINTS = 4
+KEYSIGHT_Y_INC = 0.01
+KEYSIGHT_Y_ORG = 0.0
+KEYSIGHT_Y_DISP_RANGE = 0.8  # -> vrange esperado = 0.4 (decisión D2 del plan)
+KEYSIGHT_X_INC = 5e-11
+KEYSIGHT_FRAME_DATE = "19-Aug-2026 16:03:40"
+
+
+def _write_keysight_channel(waveforms_grp: h5py.Group, channel_name: str, n_segments: int) -> None:
+    ch = waveforms_grp.create_group(channel_name)
+    ch.attrs.update(
+        dict(
+            NumPoints=KEYSIGHT_NUM_POINTS,
+            NumSegments=n_segments,
+            XInc=KEYSIGHT_X_INC,
+            XOrg=-1.97e-7,
+            YInc=KEYSIGHT_Y_INC,
+            YOrg=KEYSIGHT_Y_ORG,
+            YDispRange=np.float32(KEYSIGHT_Y_DISP_RANGE),
+            YDispOrigin=0.0,
+            YReference=1,
+            XUnits=b"Second",
+            YUnits=b"Volt",
+            MaxBandwidth=2.1e9,
+            WaveformType=1,
+            Count=1,
+        )
+    )
+    for n in range(1, n_segments + 1):
+        # raw = n (constante dentro del segmento) -> v = n*YInc + YOrg, verificable exacto.
+        seg = ch.create_dataset(f"{channel_name} Seg{n}Data", data=np.full(KEYSIGHT_NUM_POINTS, n, dtype=np.int16))
+        seg.attrs["SegmentedTimeTag"] = (n - 1) * 0.1  # monótono, relativo al primer segmento (=0.0)
+        seg.attrs["RawNumPts"] = KEYSIGHT_NUM_POINTS
+        seg.attrs["StartIndex"] = 0
+
+
+def _write_keysight_file(path: Path, n_segments: int = 12, n_channels: int = 1, with_frame: bool = True) -> Path:
+    with h5py.File(path, mode="w") as f:
+        ft = f.create_group("FileType")
+        ft.create_dataset("KeysightH5FileType", data=np.bytes_(b"Keysight Waveform"))
+
+        if with_frame:
+            frame = f.create_group("Frame")
+            dt = np.dtype([("Model", "S12"), ("Serial", "S12"), ("Date", "S22")])
+            record = np.array([(b"DSOS804A", b"MY60060103", KEYSIGHT_FRAME_DATE.encode())], dtype=dt)[0]
+            frame.create_dataset("TheFrame", data=record)
+
+        waveforms = f.create_group("Waveforms")
+        waveforms.attrs["NumWaveforms"] = n_segments * n_channels
+        channel_names = [f"Channel {i}" for i in range(1, n_channels + 1)]
+        for name in channel_names:
+            _write_keysight_channel(waveforms, name, n_segments)
+    return path
+
+
+@pytest.fixture
+def synthetic_keysight_h5(tmp_path: Path) -> Path:
+    return _write_keysight_file(tmp_path / "synthetic_keysight.h5", n_segments=12, n_channels=1)
+
+
+@pytest.fixture
+def synthetic_keysight_h5_multi_channel(tmp_path: Path) -> Path:
+    return _write_keysight_file(tmp_path / "synthetic_keysight_multi.h5", n_segments=3, n_channels=2)
+
+
+@pytest.fixture
+def synthetic_keysight_h5_no_frame(tmp_path: Path) -> Path:
+    return _write_keysight_file(tmp_path / "synthetic_keysight_no_frame.h5", n_segments=3, with_frame=False)

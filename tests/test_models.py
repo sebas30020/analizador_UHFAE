@@ -7,17 +7,30 @@ CONFIG_PATH = "config/sensors.yaml"
 
 def test_load_sensor_configs_matches_verified_real_values():
     configs = load_sensor_configs(CONFIG_PATH)
-    assert set(configs.keys()) == {"UHF", "AE"}
+    assert set(configs.keys()) == {"UHF", "AE", "UHF_KS"}
 
     uhf = configs["UHF"]
     assert uhf.fs_hz == 3.0e9
     assert uhf.n_samples == 3000
     assert uhf.freq_limit_hz == 100.0e6
+    assert uhf.decimate_full_view is False
+    assert uhf.has_trigger_metadata is True
 
     ae = configs["AE"]
     assert ae.fs_hz == 1.0e5
     assert ae.n_samples == 10000
     assert ae.freq_limit_hz == 50.0e3
+    assert ae.decimate_full_view is True
+    assert ae.has_trigger_metadata is True
+
+    # UHF_KS (rama lectura_keysight): valores nominales -- el reader los sobreescribe
+    # por archivo vía sensor_config_overrides() (ver tests/test_keysight_reader.py).
+    uhf_ks = configs["UHF_KS"]
+    assert uhf_ks.fs_hz == 2.0e10
+    assert uhf_ks.n_samples == 20000
+    assert uhf_ks.freq_limit_hz == 1.0e9
+    assert uhf_ks.decimate_full_view is True
+    assert uhf_ks.has_trigger_metadata is False
 
 
 def test_sensor_config_derived_properties():

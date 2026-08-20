@@ -15,7 +15,6 @@ Trata el archivo origen como estrictamente de solo lectura (se abre con ``mode="
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Iterator
 
@@ -23,7 +22,7 @@ import h5py
 import numpy as np
 
 from core.models import EnvironmentalSeries, EventSeries, SensorName
-from data.readers.base import OriginReader, RawSignalBatch
+from data.readers.base import OriginReader, RawSignalBatch, stable_file_dataset_id
 
 
 def _decode(value: object) -> str:
@@ -57,13 +56,13 @@ class HDF5Reader(OriginReader):
 
     @property
     def dataset_id(self) -> str:
-        """``ruta:tamaño:mtime_ns`` — estable mientras el archivo no cambie, barato de calcular
-        (evita hashear archivos de cientos de MB en cada apertura)."""
-        stat = os.stat(self._path)
-        return f"{self._path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}"
+        return stable_file_dataset_id(self._path)
 
     def list_experiments(self) -> list[str]:
         return list(self._f.keys())
+
+    def available_sensors(self) -> list[SensorName]:
+        return ["UHF", "AE"]
 
     def get_experiment_attrs(self, experiment: str) -> dict:
         return {k: (_decode(v) if isinstance(v, bytes) else v) for k, v in self._f[experiment].attrs.items()}

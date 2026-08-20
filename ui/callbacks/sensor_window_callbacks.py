@@ -29,6 +29,7 @@ from ui.callbacks.helpers import (
     parse_compare_indices,
     resolve_nav_index,
     resolve_reference_line_display,
+    resolve_sensor_availability_notice,
 )
 from ui.components.event_lines import build_event_line_shapes
 from ui.components.graph_metric import build_metric_figure
@@ -232,6 +233,23 @@ def register_callbacks(app: Dash) -> None:
         state = get_state()
         return format_filter_status(*state.get_filter_counts(sensor))
 
+    @app.callback(
+        Output("sensor-availability-notice", "children"),
+        Output("sensor-availability-notice", "className"),
+        Input("dataset-version", "data"),
+        State("page-sensor", "data"),
+    )
+    def _on_refresh_sensor_availability(dataset_version, sensor):
+        # Rama lectura_keysight (§4.5 del plan): con tres sensores posibles y cada
+        # origen entregando solo un subconjunto, una ventana sin señales de su sensor
+        # debe decirlo en vez de quedar con tres gráficas vacías sin explicación.
+        state = get_state()
+        dataset = state.dataset
+        sensor_has_signals = dataset is not None and sensor in dataset.blocks and dataset.blocks[sensor].data.shape[0] > 0
+        notice = resolve_sensor_availability_notice(sensor, dataset is not None, sensor_has_signals)
+        class_name = "sensor-empty-notice" if notice else "sensor-empty-notice hidden"
+        return notice or "", class_name
+
     # --- Visibilidad de eventos (archivos_md/prompt-mejora-graficas.md §2) -----------
 
     @app.callback(
@@ -378,7 +396,8 @@ def register_callbacks(app: Dash) -> None:
             cfg, signal_row, overlay_rows=overlay_rows, x_range_natural_units=x_range, is_raw=is_raw
         )
         metadata = build_metadata_panel(
-            index, n_total, float(block.timestamps[index]), float(block.trigger[index]), float(block.vrange[index]), is_decimated
+            index, n_total, float(block.timestamps[index]), float(block.trigger[index]), float(block.vrange[index]),
+            is_decimated, has_trigger_metadata=cfg.has_trigger_metadata,
         )
         return fig, [metadata]
 
