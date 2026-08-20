@@ -139,6 +139,14 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
                     dcc.Graph(id="graph-timeseries", figure=empty_fig),
 
                     html.Div(id="metrics-graphs-container", className="metrics-graphs-container"),
+
+                    # Bloque de cola garantizado por estructura de layout (archivos_md/
+                    # PLAN_MAPAS_2D_3D.md, etapa 3): hermano y SIEMPRE posterior a
+                    # "metrics-graphs-container" -- agregar o quitar una métrica nunca
+                    # reordena este contenedor, así que "los mapas siempre quedan
+                    # últimos" (§2 del prompt) no depende de ningún callback, es una
+                    # propiedad del árbol de componentes.
+                    html.Div(id="maps-container", className="metrics-graphs-container"),
                 ],
             ),
         ],

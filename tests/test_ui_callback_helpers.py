@@ -11,6 +11,7 @@ from ui.callbacks.helpers import (
     encode_metric_option,
     parse_compare_indices,
     parse_route,
+    resolve_map_axis_status,
     resolve_nav_index,
 )
 
@@ -185,3 +186,20 @@ def test_autoplay_interval_falls_back_on_empty_or_invalid_speed():
     assert autoplay_interval_ms(None) == autoplay_interval_ms(AUTOPLAY_DEFAULT_SPEED_HZ)
     assert autoplay_interval_ms(0) == autoplay_interval_ms(AUTOPLAY_DEFAULT_SPEED_HZ)
     assert autoplay_interval_ms(-3.0) == autoplay_interval_ms(AUTOPLAY_DEFAULT_SPEED_HZ)
+
+
+# --- estado de los ejes de los mapas de separación (#4/#5) ---
+
+def test_resolve_map_axis_status_missing_axis_is_not_assigned():
+    assert resolve_map_axis_status(["rms", None]) == (False, False)
+    assert resolve_map_axis_status([None, None, None]) == (False, False)
+
+
+def test_resolve_map_axis_status_all_assigned_no_duplicate():
+    assert resolve_map_axis_status(["rms", "kurtosis"]) == (True, False)
+    assert resolve_map_axis_status(["rms", "kurtosis", "vpp"]) == (True, False)
+
+
+def test_resolve_map_axis_status_all_assigned_with_duplicate():
+    assert resolve_map_axis_status(["rms", "rms"]) == (True, True)
+    assert resolve_map_axis_status(["rms", "kurtosis", "rms"]) == (True, True)

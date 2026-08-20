@@ -230,3 +230,20 @@ def resolve_reference_line_display(
     if value is None:
         return None, REFERENCE_NO_DATA_MESSAGE
     return value, None
+
+
+def resolve_map_axis_status(metric_ids: list[str | None]) -> tuple[bool, bool]:
+    """Resuelve el estado de los selectores de eje de un mapa de separación
+    (``archivos_md/prompt-mapas2d3d.md`` §3): ``(todos_asignados, hay_metrica_repetida)``.
+
+    ``todos_asignados=False``: al menos un eje no tiene métrica -- el llamador debe
+    mostrar el estado vacío informativo (``ui.components.graph_map_common.
+    build_empty_map_figure``) en vez de intentar calcular nada. La duplicidad no se
+    evalúa en ese caso (no aplica hasta que todos los ejes tengan métrica).
+
+    ``hay_metrica_repetida``: la misma métrica en dos o más ejes es válida (§3: "se
+    permite repetir"), pero el llamador debe mostrarlo con una advertencia discreta.
+    """
+    if any(m is None for m in metric_ids):
+        return False, False
+    return True, len(set(metric_ids)) != len(metric_ids)

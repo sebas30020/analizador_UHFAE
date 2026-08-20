@@ -32,6 +32,19 @@ from ui.callbacks.helpers import encode_metric_option
 _DEFAULT_REFERENCE_T_MIN = 10.0
 
 
+def _puntual_metric_axis_options() -> list[dict]:
+    """Catálogo de los selectores de eje de los mapas de separación #4/#5
+    (``archivos_md/prompt-mapas2d3d.md``): solo régimen puntual (decisión D3,
+    ``archivos_md/PLAN_MAPAS_2D_3D.md``) -- es el único que produce un escalar por
+    señal, así que no hace falta codificar el régimen en el valor de la opción como en
+    ``_all_metric_options`` (aquí ``value`` es directamente el ``metric_id``)."""
+    options = []
+    for d in list_metrics(regimen="puntual"):
+        unit = f" ({d.unit})" if d.unit else ""
+        options.append({"label": f"{d.label}{unit}", "value": d.id})
+    return options
+
+
 def _all_metric_options() -> list[dict]:
     """Cada métrica puntual aparece dos veces (puntual y grupo-reducción) más las
     intrínsecas de grupo, codificando ``"<regimen>:<metric_id>"`` porque un mismo
@@ -168,6 +181,50 @@ def build_control_panel(
                 id="reference-line-t",
                 type="number", value=_DEFAULT_REFERENCE_T_MIN, min=0.000001,
                 debounce=True, style={"width": "100%"},
+            ),
+
+            html.Hr(),
+            html.H4("Mapas de separación"),
+            html.Div(
+                title="Gráfica #4: mapa 2D donde cada punto es una señal, ubicada por los valores de dos métricas puntuales cualesquiera. Reutiliza el mismo conjunto de señales del filtrado activo.",
+                children=dcc.Checklist(
+                    id="map-2d-enabled",
+                    options=[{"label": " Habilitar mapa 2D", "value": "show"}],
+                    value=[],
+                ),
+            ),
+            html.Label("Eje X (mapa 2D)"),
+            dcc.Dropdown(
+                id="map-2d-x-metric", options=_puntual_metric_axis_options(),
+                value=None, clearable=True, placeholder="Métrica para el eje X",
+            ),
+            html.Label("Eje Y (mapa 2D)"),
+            dcc.Dropdown(
+                id="map-2d-y-metric", options=_puntual_metric_axis_options(),
+                value=None, clearable=True, placeholder="Métrica para el eje Y",
+            ),
+            html.Div(
+                title="Gráfica #5: igual que el mapa 2D con un tercer eje. Solo lectura para navegación (Plotly no ofrece lazo/caja de selección dentro de una escena 3D) -- el filtrado por selección se hace desde el mapa 2D.",
+                children=dcc.Checklist(
+                    id="map-3d-enabled",
+                    options=[{"label": " Habilitar mapa 3D", "value": "show"}],
+                    value=[],
+                ),
+            ),
+            html.Label("Eje X (mapa 3D)"),
+            dcc.Dropdown(
+                id="map-3d-x-metric", options=_puntual_metric_axis_options(),
+                value=None, clearable=True, placeholder="Métrica para el eje X",
+            ),
+            html.Label("Eje Y (mapa 3D)"),
+            dcc.Dropdown(
+                id="map-3d-y-metric", options=_puntual_metric_axis_options(),
+                value=None, clearable=True, placeholder="Métrica para el eje Y",
+            ),
+            html.Label("Eje Z (mapa 3D)"),
+            dcc.Dropdown(
+                id="map-3d-z-metric", options=_puntual_metric_axis_options(),
+                value=None, clearable=True, placeholder="Métrica para el eje Z",
             ),
 
             html.Hr(),

@@ -29,11 +29,15 @@ from ui.callbacks.helpers import (
     clamp_index,
     decode_metric_option,
     parse_compare_indices,
+    resolve_map_axis_status,
     resolve_nav_index,
     resolve_reference_line_display,
     resolve_sensor_availability_notice,
 )
 from ui.components.event_lines import build_event_line_shapes
+from ui.components.graph_map_2d import build_map_2d_figure
+from ui.components.graph_map_3d import build_map_3d_figure
+from ui.components.graph_map_common import build_empty_map_figure
 from ui.components.graph_metric import build_metric_figure
 from ui.components.graph_signal import build_signal_figure
 from ui.components.graph_timeseries import build_timeseries_figure
@@ -42,6 +46,7 @@ from ui.components.reference_line import build_reference_annotation, build_refer
 from ui.components.time_axis import elapsed_minutes_to_unix_seconds, to_elapsed_minutes
 from ui.reference_registry import get_reference_registry
 from ui.state import get_state
+from viz.maps import build_map_dataset
 from viz.reference_line import build_prefix_sums
 from viz.reference_line import mean_until as compute_reference_mean
 from viz.smoothing import SmoothingSpec
@@ -81,6 +86,58 @@ def _open_file_dialog() -> str | None:
     )
     root.destroy()
     return path or None
+
+
+# --- Mapas de separación #4/#5 (archivos_md/prompt-mapas2d3d.md, etapa 3) -----------
+#
+# Solo régimen puntual (decisión D3, archivos_md/PLAN_MAPAS_2D_3D.md): los selectores
+# de eje del panel de control (``ui/components/control_panel.py::
+# _puntual_metric_axis_options``) ya ofrecen únicamente ese catálogo, así que aquí el
+# valor del dropdown ES el ``metric_id`` directamente -- no pasa por
+# ``decode_metric_option`` como el selector múltiple de la gráfica #3.
+
+
+def _render_map_2d_slot(cache, block, cfg, dataset, sensor, x_metric, y_metric, active_mask):
+    all_assigned, has_duplicate = resolve_map_axis_status([x_metric, y_metric])
+    if not all_assigned:
+        fig = build_empty_map_figure()
+        return html.Div(dcc.Graph(id="graph-map-2d", figure=fig), className="metrics-graph-slot")
+    try:
+        map_dataset = build_map_dataset(
+            cache, block, cfg, dataset.dataset_id, {"x": x_metric, "y": y_metric}, active_mask=active_mask,
+        )
+        fig = build_map_2d_figure(
+            map_dataset, same_metric_warning=has_duplicate,
+            uirevision=f"{sensor}|{dataset.dataset_id}|map2d|{x_metric}|{y_metric}",
+        )
+        return html.Div(dcc.Graph(id="graph-map-2d", figure=fig), className="metrics-graph-slot")
+    except Exception as exc:
+        # Aislado del resto de la ventana, mismo criterio que el bucle de gráficas de
+        # métricas más abajo: un fallo en el mapa no debe tirar abajo las demás gráficas.
+        _logger.exception("etapa=ui.map error=fallo_calculo sensor=%s mapa=2d x=%s y=%s", sensor, x_metric, y_metric)
+        return html.Div(f"No se pudo calcular el mapa 2D: {exc}", className="metrics-graph-slot metrics-graph-error")
+
+
+def _render_map_3d_slot(cache, block, cfg, dataset, sensor, x_metric, y_metric, z_metric, active_mask):
+    all_assigned, has_duplicate = resolve_map_axis_status([x_metric, y_metric, z_metric])
+    if not all_assigned:
+        fig = build_empty_map_figure()
+        return html.Div(dcc.Graph(id="graph-map-3d", figure=fig), className="metrics-graph-slot")
+    try:
+        map_dataset = build_map_dataset(
+            cache, block, cfg, dataset.dataset_id,
+            {"x": x_metric, "y": y_metric, "z": z_metric}, active_mask=active_mask,
+        )
+        fig = build_map_3d_figure(
+            map_dataset, same_metric_warning=has_duplicate,
+            uirevision=f"{sensor}|{dataset.dataset_id}|map3d|{x_metric}|{y_metric}|{z_metric}",
+        )
+        return html.Div(dcc.Graph(id="graph-map-3d", figure=fig), className="metrics-graph-slot")
+    except Exception as exc:
+        _logger.exception(
+            "etapa=ui.map error=fallo_calculo sensor=%s mapa=3d x=%s y=%s z=%s", sensor, x_metric, y_metric, z_metric
+        )
+        return html.Div(f"No se pudo calcular el mapa 3D: {exc}", className="metrics-graph-slot metrics-graph-error")
 
 
 def register_callbacks(app: Dash) -> None:
@@ -590,6 +647,53 @@ def register_callbacks(app: Dash) -> None:
 
         registry.replace_all(registry_entries)
         return graphs
+
+    # --- Mapas de separación #4/#5 (archivos_md/prompt-mapas2d3d.md) -----------------
+
+    @app.callback(
+        Output("maps-container", "children"),
+        Input("map-2d-enabled", "value"),
+        Input("map-2d-x-metric", "value"),
+        Input("map-2d-y-metric", "value"),
+        Input("map-3d-enabled", "value"),
+        Input("map-3d-x-metric", "value"),
+        Input("map-3d-y-metric", "value"),
+        Input("map-3d-z-metric", "value"),
+        Input("dataset-version", "data"),
+        Input("filter-version", "data"),
+        State("page-sensor", "data"),
+    )
+    def _on_refresh_maps(
+        map_2d_enabled_value, x2d, y2d,
+        map_3d_enabled_value, x3d, y3d, z3d,
+        dataset_version, filter_version, sensor,
+    ):
+        # "maps-container" es hermano y SIEMPRE posterior a "metrics-graphs-container"
+        # en el layout (ui/components/sensor_window.py) -- el orden "los mapas siempre
+        # quedan últimos" (§2 del prompt) ya está garantizado por esa estructura, este
+        # callback solo decide QUÉ va dentro de este contenedor, nunca reordena nada
+        # fuera de él.
+        #
+        # Deshabilitado = no se renderiza ni se calcula (§3 del prompt): si el checkbox
+        # correspondiente no está marcado, ni siquiera se construye el mapa -- la
+        # configuración de ejes queda intacta en los propios dropdowns (componentes
+        # estáticos del panel de control, nunca destruidos por este callback) para
+        # cuando se vuelva a habilitar.
+        state = get_state()
+        dataset = state.dataset
+        if dataset is None or sensor not in dataset.blocks:
+            return []
+
+        block = dataset.blocks[sensor]
+        cfg = dataset.sensor_configs[sensor]
+        active_mask = state.get_active_mask(sensor)
+
+        slots = []
+        if _is_checked(map_2d_enabled_value, "show"):
+            slots.append(_render_map_2d_slot(state.cache, block, cfg, dataset, sensor, x2d, y2d, active_mask))
+        if _is_checked(map_3d_enabled_value, "show"):
+            slots.append(_render_map_3d_slot(state.cache, block, cfg, dataset, sensor, x3d, y3d, z3d, active_mask))
+        return slots
 
     # --- Controles dependientes del bloque "Opciones de visualización" ---------------
 
