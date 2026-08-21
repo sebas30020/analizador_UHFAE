@@ -3,6 +3,8 @@ servidor ni un navegador (los ``@app.callback`` en ``sensor_window_callbacks.py`
 envoltorios delgados sobre estas funciones)."""
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -305,3 +307,28 @@ def resolve_map_axis_status(metric_ids: list[str | None]) -> tuple[bool, bool]:
     if any(m is None for m in metric_ids):
         return False, False
     return True, len(set(metric_ids)) != len(metric_ids)
+
+
+# --- Exportación de datos filtrados (Fase 6) ------------------------------------------
+
+_EXPORT_SUFFIX = "_filtrado"
+
+
+def default_export_filename(source_path: Path, now: datetime) -> str:
+    """Nombre por defecto para el diálogo "Guardar como" de la exportación: el nombre
+    del archivo de origen con un sufijo y una marca de tiempo, para que exportar el
+    mismo dataset dos veces (p. ej. con distinto filtro aplicado) no proponga
+    sobrescribir el archivo anterior sin más."""
+    return f"{source_path.stem}{_EXPORT_SUFFIX}_{now:%Y%m%d_%H%M%S}.hdf5"
+
+
+def format_export_starting_message(destination: Path) -> str:
+    return f"Exportando a {destination.name}…"
+
+
+def format_export_done_message(destination: Path, n_resultantes: int, n_filtradas: int) -> str:
+    return f"Exportado: {destination.name} ({n_resultantes} resultantes, {n_filtradas} filtradas)"
+
+
+def format_export_error_message(exc: Exception) -> str:
+    return f"Error al exportar: {exc}"

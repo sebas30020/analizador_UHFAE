@@ -59,6 +59,12 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
             # dash.Patch sin volver a construirlas ni tocar ningún dato de métricas.
             dcc.Store(id="event-shapes", data=[]),
 
+            # Fase 6: la escritura de "Exportar datos filtrados…" corre en un hilo
+            # aparte (``AppState.export_status``, sondeado en vez de empujado porque un
+            # hilo de fondo no puede escribir directamente en un Output de Dash) -- nace
+            # deshabilitado, igual que el Interval de auto-play.
+            dcc.Interval(id="export-status-poll", interval=700, disabled=True),
+
             html.Div(
                 className="panel-lateral",
                 children=[

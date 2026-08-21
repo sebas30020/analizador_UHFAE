@@ -235,6 +235,15 @@ identificando el archivo 1 a 1, así que no hay riesgo de que la clave de caché
 resultados de dos configuraciones distintas aunque `fs_hz`/`n_samples` no formen parte de
 esa clave.
 
+Un cuarto origen ya se implementó con este mismo mecanismo, esta vez generado por la
+propia herramienta: `data/export.py::export_filtered` escribe un archivo con las señales
+resultantes/filtradas del filtrado interactivo (Fase 6, `archivos_md/
+EXPORTACION_FILTRADA_ENTREGA.md`), y `data/readers/filtered_export_reader.py::
+FilteredExportReader` lo relee como un `OriginReader` más — `open_reader` lo distingue
+de los otros dos por *sniffing* del atributo raíz `file_type`, igual que distingue
+Keysight de HDF5 con chunks. **Cero cambios** en `data/ingest.py`, `metrics/`, `cache/`
+ni en los otros dos readers.
+
 ## 9. Decisiones que conviene conocer antes de tocar el código
 
 - **Paralelismo medido, no supuesto.** `compute_puntual` acepta `n_workers`, pero el

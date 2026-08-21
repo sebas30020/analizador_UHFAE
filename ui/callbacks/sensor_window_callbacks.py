@@ -4,6 +4,8 @@ lógica pura de ``ui/callbacks/helpers.py`` y las fachadas de ``cache/service.py
 from __future__ import annotations
 
 import logging
+import threading
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from dash.exceptions import PreventUpdate
 from cache.service import get_or_compute_group_intrinsic, get_or_compute_group_reduction, get_or_compute_puntual
 from core.grouping import resolve_groups
 from core.normalization import normalize
+from data.export import ExportPartition, export_filtered
 from metrics.registry import get_metric
 from ui.callbacks.filtering import (
     format_filter_status,
@@ -28,6 +31,10 @@ from ui.callbacks.helpers import (
     autoplay_interval_ms,
     clamp_index,
     decode_metric_option,
+    default_export_filename,
+    format_export_done_message,
+    format_export_error_message,
+    format_export_starting_message,
     parse_compare_indices,
     resolve_map_axis_status,
     resolve_map_click_signal_index,
@@ -47,7 +54,7 @@ from ui.components.reference_line import build_reference_annotation, build_refer
 from ui.components.time_axis import elapsed_minutes_to_unix_seconds, to_elapsed_minutes
 from ui.map_registry import get_map_registry
 from ui.reference_registry import get_reference_registry
-from ui.state import get_state
+from ui.state import AppState, ExportSnapshot, get_state
 from viz.maps import build_map_dataset, resolve_map_highlight_coords
 from viz.reference_line import build_prefix_sums
 from viz.reference_line import mean_until as compute_reference_mean
@@ -88,6 +95,59 @@ def _open_file_dialog() -> str | None:
     )
     root.destroy()
     return path or None
+
+
+def _open_save_file_dialog(initial_name: str) -> str | None:
+    """Explorador nativo "Guardar como" para elegir el destino de "Exportar datos
+    filtrados…" -- mismo patrón y misma justificación que :func:`_open_file_dialog`.
+    """
+    import tkinter as tk
+    from tkinter import filedialog
+
+    initial_dir = next((str(p) for p in _DEFAULT_DATA_DIR_CANDIDATES if p.exists()), str(Path.home()))
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    path = filedialog.asksaveasfilename(
+        title="Exportar datos filtrados (HDF5)",
+        initialdir=initial_dir,
+        initialfile=initial_name,
+        defaultextension=".hdf5",
+        filetypes=[("HDF5", "*.hdf5 *.h5"), ("Todos los archivos", "*.*")],
+    )
+    root.destroy()
+    return path or None
+
+
+def _run_export(state: AppState, snapshot: ExportSnapshot, destination: str) -> None:
+    """Cuerpo del hilo de exportación (Fase 6): nunca corre en el hilo del callback de
+    Dash -- ``export_filtered`` puede tardar varios segundos con ``UHF_KS`` (~1,6 GB) y
+    bloquear el único proceso Dash congelaría la interfaz para cualquier pestaña
+    abierta, no solo la que exporta.
+    """
+    try:
+        n_resultantes, n_filtradas = export_filtered(
+            destination,
+            snapshot.dataset_id,
+            snapshot.experiment,
+            snapshot.normalization_version,
+            snapshot.blocks,
+            snapshot.sensor_configs,
+            snapshot.active_masks,
+            snapshot.environmental,
+            snapshot.events,
+        )
+    except Exception as exc:
+        _logger.exception("etapa=export.filtrado error=fallo_escritura destino=%s", destination)
+        state.finish_export_status(format_export_error_message(exc))
+        return
+    state.finish_export_status(format_export_done_message(Path(destination), n_resultantes, n_filtradas))
+
+
+def _launch_export_thread(state: AppState, snapshot: ExportSnapshot, destination: str) -> None:
+    thread = threading.Thread(target=_run_export, args=(state, snapshot, destination), daemon=True, name="filtered-export")
+    thread.start()
 
 
 # --- Mapas de separación #4/#5 (archivos_md/prompt-mapas2d3d.md, etapa 3) -----------
@@ -173,15 +233,49 @@ def register_callbacks(app: Dash) -> None:
         Output("dataset-version", "data"),
         Input("btn-select-db", "n_clicks"),
         State("dataset-version", "data"),
+        State("load-partition", "value"),
         prevent_initial_call=True,
     )
-    def _on_select_db(n_clicks: int, current_version: int | None):
+    def _on_select_db(n_clicks: int, current_version: int | None, partition: ExportPartition | None):
         path = _open_file_dialog()
         if not path:
             raise PreventUpdate
         state = get_state()
-        dataset = state.load_dataset(path)
+        dataset = state.load_dataset(path, partition=partition or "resultantes")
         return str(dataset.source_path), (current_version or 0) + 1
+
+    # --- Exportación de datos filtrados (Fase 6) -------------------------------------
+    #
+    # El botón dispara el diálogo nativo "Guardar como" y lanza la escritura en un hilo
+    # aparte (``_launch_export_thread``); el mismo callback también atiende los ticks
+    # del ``dcc.Interval`` de sondeo, que solo existe para reflejar en la etiqueta lo
+    # que ese hilo va reportando en ``AppState.export_status`` -- un hilo de fondo no
+    # puede escribir directamente en un ``Output`` de Dash.
+
+    @app.callback(
+        Output("export-status", "children"),
+        Output("export-status-poll", "disabled"),
+        Input("btn-export-filtered", "n_clicks"),
+        Input("export-status-poll", "n_intervals"),
+        prevent_initial_call=True,
+    )
+    def _on_export_filtered(n_clicks, n_intervals):
+        state = get_state()
+        if ctx.triggered_id == "btn-export-filtered":
+            snapshot = state.export_snapshot()
+            if snapshot is None:
+                raise PreventUpdate
+            default_name = default_export_filename(snapshot.source_path, datetime.now())
+            destination = _open_save_file_dialog(default_name)
+            if not destination:
+                raise PreventUpdate
+            state.start_export_status(format_export_starting_message(Path(destination)))
+            _launch_export_thread(state, snapshot, destination)
+            message, in_progress = state.export_status
+            return message, not in_progress
+
+        message, in_progress = state.export_status
+        return message, not in_progress
 
     @app.callback(
         Output("nav-index", "value"),

@@ -15,7 +15,9 @@ from pathlib import Path
 
 import h5py
 
+from data.export import ExportPartition
 from data.readers.base import OriginReader
+from data.readers.filtered_export_reader import FilteredExportReader, is_filtered_export_file
 from data.readers.hdf5_reader import HDF5Reader
 from data.readers.keysight_reader import KeysightSegmentedReader, _is_keysight_segmented_file
 
@@ -30,21 +32,28 @@ def _looks_like_chunked_experiment(f: h5py.File) -> bool:
     return False
 
 
-def open_reader(path: str | Path) -> OriginReader:
+def open_reader(path: str | Path, partition: ExportPartition = "resultantes") -> OriginReader:
     """Inspecciona ``path`` y devuelve la implementación de :class:`OriginReader` que
     corresponde, ya sin abrir -- el llamador la usa como context manager
     (``with open_reader(path) as reader:``), igual que si hubiera instanciado el reader
     concreto directamente.
+
+    ``partition`` solo tiene efecto sobre un archivo exportado por ``data/export.py``
+    (Fase 6, filtrado cruzado) -- es inerte para los otros dos formatos de origen, que
+    no tienen noción de partición.
     """
     path = Path(path)
     with h5py.File(path, mode="r") as f:
+        if is_filtered_export_file(f):
+            return FilteredExportReader(path, partition=partition)
         if _is_keysight_segmented_file(f):
             return KeysightSegmentedReader(path)
         if _looks_like_chunked_experiment(f):
             return HDF5Reader(path)
 
     raise ValueError(
-        f"No se reconoce el esquema de '{path}': no es un archivo Keysight en memoria "
-        "segmentada (falta FileType/KeysightH5FileType) ni un experimento con chunks "
-        "(esquema_med_5_ago_3.md, falta un grupo raíz con subgrupos 'chunk_*')."
+        f"No se reconoce el esquema de '{path}': no es un archivo exportado "
+        "(data/export.py, falta el atributo raíz 'file_type'), ni un archivo Keysight "
+        "en memoria segmentada (falta FileType/KeysightH5FileType), ni un experimento "
+        "con chunks (esquema_med_5_ago_3.md, falta un grupo raíz con subgrupos 'chunk_*')."
     )

@@ -1,3 +1,6 @@
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 
 from ui.callbacks.helpers import (
@@ -8,7 +11,11 @@ from ui.callbacks.helpers import (
     autoplay_interval_ms,
     clamp_index,
     decode_metric_option,
+    default_export_filename,
     encode_metric_option,
+    format_export_done_message,
+    format_export_error_message,
+    format_export_starting_message,
     parse_compare_indices,
     parse_route,
     resolve_map_axis_status,
@@ -256,3 +263,23 @@ def test_resolve_map_click_signal_index_out_of_range_returns_none():
     # es correcto, navegar con un índice de la generación previa sería peor.
     click_data = {"points": [{"curveNumber": 0, "pointNumber": 999}]}
     assert resolve_map_click_signal_index(click_data, _SIGNAL_INDICES) is None
+
+
+def test_default_export_filename_includes_stem_and_timestamp():
+    source = Path("/datos/med_5_ago_3.hdf5")
+    now = datetime(2026, 8, 21, 14, 30, 5)
+    name = default_export_filename(source, now)
+    assert name == "med_5_ago_3_filtrado_20260821_143005.hdf5"
+
+
+def test_format_export_starting_message():
+    assert format_export_starting_message(Path("/x/salida.hdf5")) == "Exportando a salida.hdf5…"
+
+
+def test_format_export_done_message():
+    msg = format_export_done_message(Path("/x/salida.hdf5"), 120, 30)
+    assert msg == "Exportado: salida.hdf5 (120 resultantes, 30 filtradas)"
+
+
+def test_format_export_error_message():
+    assert format_export_error_message(OSError("disco lleno")) == "Error al exportar: disco lleno"

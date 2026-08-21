@@ -103,6 +103,21 @@ amplitud: cada señal es un segmento vertical, y basta con que el lazo alcance u
 dos extremos para incluirla. Un lazo que cruce el centro de un segmento sin tocar ninguno
 de sus extremos no lo selecciona — Plotly solo conoce los vértices que dibuja.
 
+### Exportar datos filtrados
+
+El botón **"Exportar datos filtrados…"**, junto a los controles de filtrado, escribe a
+un archivo `.hdf5` nuevo las señales de **todos** los sensores del dataset cargado, en
+dos particiones separadas: las **resultantes** (activas tras el filtro) y las
+**filtradas** (excluidas), cada una con sus trazas crudas, metadatos, y los
+ambientales/eventos del experimento. La escritura corre en segundo plano, sin bloquear
+la interfaz mientras dura.
+
+El archivo exportado se puede volver a abrir con **"Seleccionar base de datos…"** como
+un origen más: el selector **"Partición a cargar"** elige si se carga solo lo
+resultante, solo lo filtrado, o ambas particiones recombinadas (el conjunto original
+completo, indistinguible de antes de filtrar). Ese selector es inerte para los otros dos
+formatos de origen.
+
 ---
 
 ## Documentación
@@ -118,6 +133,7 @@ de sus extremos no lo selecciona — Plotly solo conoce los vértices que dibuja
 | [archivos_md/LECTURA_KEYSIGHT_ENTREGA.md](archivos_md/LECTURA_KEYSIGHT_ENTREGA.md) | Lectura de bases de datos Keysight: decisiones, implementación y verificación |
 | [archivos_md/AUTOPLAY_ENTREGA.md](archivos_md/AUTOPLAY_ENTREGA.md) | Auto-play de la gráfica #2: navegación consciente del filtrado, control de velocidad, verificación |
 | [archivos_md/MAPAS_2D_3D_ENTREGA.md](archivos_md/MAPAS_2D_3D_ENTREGA.md) | Mapas de separación #4/#5: decisiones, dos bugs de identificación de puntos encontrados en uso, rendimiento |
+| [archivos_md/EXPORTACION_FILTRADA_ENTREGA.md](archivos_md/EXPORTACION_FILTRADA_ENTREGA.md) | Exportación de datos filtrados: formato, reapertura como origen, rendimiento |
 | `PROMPT_Analizador_Señales_UHF_AE.md` | Especificación maestra del proyecto |
 
 ## Desarrollo

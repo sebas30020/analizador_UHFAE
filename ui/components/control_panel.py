@@ -77,6 +77,23 @@ def build_control_panel(
         children=[
             html.Button("Seleccionar base de datos…", id="btn-select-db", n_clicks=0),
             html.Div(id="db-path-label", children=initial_db_label, className="db-path-label"),
+            html.Div(
+                title="Solo aplica si el archivo elegido es una exportación filtrada de esta misma "
+                      "herramienta (botón \"Exportar datos filtrados…\" más abajo); se ignora para "
+                      "cualquier otro origen (med_5_ago_3.hdf5, Keysight).",
+                children=[
+                    html.Label("Partición a cargar (solo archivos exportados)"),
+                    dcc.RadioItems(
+                        id="load-partition",
+                        options=[
+                            {"label": " Resultantes (activas)", "value": "resultantes"},
+                            {"label": " Filtradas (excluidas)", "value": "filtradas"},
+                            {"label": " Ambas (conjunto completo)", "value": "ambas"},
+                        ],
+                        value="resultantes",
+                    ),
+                ],
+            ),
             html.Hr(),
 
             html.H4("Métricas"),
@@ -237,6 +254,16 @@ def build_control_panel(
                     html.Button("Deshacer", id="btn-undo-filter", n_clicks=0),
                     html.Button("Rehacer", id="btn-redo-filter", n_clicks=0),
                     html.Button("Restablecer todo", id="btn-reset-filters", n_clicks=0),
+                ],
+            ),
+            html.Div(
+                title="Exporta TODOS los sensores del dataset cargado a un archivo HDF5 nuevo, con las "
+                      "señales resultantes (activas) y las filtradas (excluidas) en particiones separadas "
+                      "-- cada una con su matriz de trazas crudas, metadatos, y los ambientales/eventos del "
+                      "experimento. La escritura corre en segundo plano, sin bloquear la interfaz.",
+                children=[
+                    html.Button("Exportar datos filtrados…", id="btn-export-filtered", n_clicks=0),
+                    html.Div(id="export-status", children="", className="export-status"),
                 ],
             ),
         ],

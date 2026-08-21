@@ -22,6 +22,8 @@ import numpy as np
 from cache.backend import SqliteHdf5CacheBackend
 from cache.warmup import default_warmup_specs, start_background_warmup
 from core.models import EnvironmentalSeries, EventSeries, SensorConfig, SensorName, SignalBlock, load_sensor_configs
+from core.normalization import NORMALIZATION_VERSION
+from data.export import ExportPartition
 from data.ingest import ingest_experiment
 from data.readers.factory import open_reader
 
@@ -42,6 +44,30 @@ class LoadedDataset:
     environmental: EnvironmentalSeries
     events: EventSeries
     t0: float
+
+
+@dataclass
+class ExportSnapshot:
+    """Copia barata del dataset cargado y de las máscaras de filtrado activas, tomada
+    bajo el lock del proceso (Fase 6: "Exportar datos filtrados…").
+
+    ``blocks``/``sensor_configs``/``environmental``/``events`` son las referencias del
+    ``LoadedDataset`` actual, no copias -- un ``load_dataset()`` posterior nunca muta un
+    dataset ya cargado, solo reemplaza ``AppState._dataset`` por uno nuevo, así que
+    seguir leyendo estas referencias en un hilo aparte tras soltar el lock es seguro.
+    Solo ``active_masks`` se copia de verdad, porque esa sí puede seguir mutando en el
+    proceso mientras la exportación está en curso.
+    """
+
+    dataset_id: str
+    experiment: str
+    normalization_version: str
+    source_path: Path
+    blocks: dict[SensorName, SignalBlock]
+    sensor_configs: dict[SensorName, SensorConfig]
+    active_masks: dict[SensorName, np.ndarray]
+    environmental: EnvironmentalSeries
+    events: EventSeries
 
 
 def compute_t0(
@@ -103,17 +129,30 @@ class AppState:
         self._redo_stack: dict[SensorName, list[np.ndarray]] = {}
         self._filter_version = 0
 
-    def load_dataset(self, path: str | Path) -> LoadedDataset:
+        # Fase 6: estado del último "Exportar datos filtrados…" lanzado en este proceso
+        # (mensaje + si sigue en curso) -- la escritura corre en un hilo aparte
+        # (``ui/callbacks/sensor_window_callbacks.py``), así que el callback de Dash que
+        # dispara el botón no puede esperar el resultado; un ``dcc.Interval`` sondea
+        # este estado hasta que ``en_progreso`` pasa a ``False``. Mismo espíritu que
+        # ``_dataset_version``/``_filter_version``, pero no hace falta contador: solo
+        # hay una exportación relevante a la vez, la última.
+        self._export_in_progress = False
+        self._export_message = ""
+
+    def load_dataset(self, path: str | Path, partition: ExportPartition = "resultantes") -> LoadedDataset:
         """Ingiere un archivo de origen (§10 supuesto #6 de FASE0: un archivo = un
         experimento independiente) y lo deja como dataset activo.
 
-        El formato del archivo (esquema con chunks, o Keysight en memoria segmentada,
-        rama ``lectura_keysight``) se detecta por contenido en ``open_reader`` -- este
-        método no sabe cuál es, solo habla con la interfaz ``OriginReader`` (§10.3,
-        prueba de fuego #3 del PROMPT maestro).
+        El formato del archivo (esquema con chunks, Keysight en memoria segmentada, o
+        una exportación filtrada de esta misma herramienta -- ``data/export.py``) se
+        detecta por contenido en ``open_reader`` -- este método no sabe cuál es, solo
+        habla con la interfaz ``OriginReader`` (§10.3, prueba de fuego #3 del PROMPT
+        maestro). ``partition`` solo tiene efecto sobre una exportación filtrada: qué
+        subconjunto cargar (activas, excluidas, o ambas recombinadas) -- inerte para
+        los otros dos formatos.
         """
         sensor_configs = load_sensor_configs(self._sensors_config_path)
-        with open_reader(path) as reader:
+        with open_reader(path, partition=partition) as reader:
             experiments = reader.list_experiments()
             if not experiments:
                 raise ValueError(f"El archivo no contiene ningún experimento: {path}")
@@ -326,6 +365,51 @@ class AppState:
     def can_redo(self, sensor: SensorName) -> bool:
         with self._lock:
             return bool(self._redo_stack.get(sensor))
+
+    # --- Exportación de datos filtrados (Fase 6) -------------------------------------
+
+    def export_snapshot(self) -> ExportSnapshot | None:
+        """Copia barata para exportar en un hilo aparte sin retener el lock del
+        proceso durante la escritura a disco (potencialmente varios segundos con
+        ``UHF_KS``, ~1,6 GB). ``None`` si no hay dataset cargado -- no hay nada que
+        exportar."""
+        with self._lock:
+            dataset = self._dataset
+            if dataset is None:
+                return None
+            active_masks = {sensor: mask.copy() for sensor, mask in self._active_mask.items()}
+        return ExportSnapshot(
+            dataset_id=dataset.dataset_id,
+            experiment=dataset.experiment,
+            normalization_version=NORMALIZATION_VERSION,
+            source_path=dataset.source_path,
+            blocks=dataset.blocks,
+            sensor_configs=dataset.sensor_configs,
+            active_masks=active_masks,
+            environmental=dataset.environmental,
+            events=dataset.events,
+        )
+
+    def start_export_status(self, message: str) -> None:
+        with self._lock:
+            self._export_in_progress = True
+            self._export_message = message
+
+    def finish_export_status(self, message: str) -> None:
+        with self._lock:
+            self._export_in_progress = False
+            self._export_message = message
+
+    @property
+    def export_status(self) -> tuple[str, bool]:
+        """``(mensaje, en_progreso)`` de la última exportación lanzada en este proceso
+        -- ``("", False)`` si nunca se exportó nada. Sondeado por un ``dcc.Interval``
+        desde que se lanza el hilo de escritura hasta que termina (``ui/callbacks/
+        sensor_window_callbacks.py``): el hilo no puede escribir directamente en un
+        ``Output`` de Dash, así que el estado se publica aquí y el callback lo lee.
+        """
+        with self._lock:
+            return self._export_message, self._export_in_progress
 
 
 _STATE: AppState | None = None
