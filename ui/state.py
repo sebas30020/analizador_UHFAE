@@ -26,6 +26,7 @@ from core.normalization import NORMALIZATION_VERSION
 from data.export import ExportPartition
 from data.ingest import ingest_experiment
 from data.readers.factory import open_reader
+from data.readers.filtered_export_reader import FilteredExportReader
 
 _logger = logging.getLogger("analizador.ui.state")
 
@@ -44,6 +45,11 @@ class LoadedDataset:
     environmental: EnvironmentalSeries
     events: EventSeries
     t0: float
+    # Partición efectivamente cargada, o ``None`` si el origen no es una exportación
+    # filtrada (``data/export.py``) y por lo tanto no tiene particiones. Es lo que
+    # permite al selector "Partición a cargar" saber si puede recargar en vivo o si
+    # debe quedarse inerte -- ver ``ui/callbacks/sensor_window_callbacks.py``.
+    partition: ExportPartition | None = None
 
 
 @dataclass
@@ -153,6 +159,9 @@ class AppState:
         """
         sensor_configs = load_sensor_configs(self._sensors_config_path)
         with open_reader(path, partition=partition) as reader:
+            # Solo una exportación filtrada tiene particiones; para los otros dos
+            # formatos ``partition`` se ignoró y anotarlo sería mentir sobre lo cargado.
+            effective_partition = partition if isinstance(reader, FilteredExportReader) else None
             experiments = reader.list_experiments()
             if not experiments:
                 raise ValueError(f"El archivo no contiene ningún experimento: {path}")
@@ -187,6 +196,7 @@ class AppState:
             environmental=result.environmental,
             events=result.events,
             t0=compute_t0(result.sensors, result.environmental, result.events),
+            partition=effective_partition,
         )
         with self._lock:
             self._dataset = dataset

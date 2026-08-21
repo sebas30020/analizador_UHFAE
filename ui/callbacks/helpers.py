@@ -9,6 +9,7 @@ from typing import Callable
 
 import numpy as np
 
+from data.export import ExportPartition
 from ui.components.graph_map_common import POINTS_TRACE_INDEX
 
 
@@ -332,3 +333,41 @@ def format_export_done_message(destination: Path, n_resultantes: int, n_filtrada
 
 def format_export_error_message(exc: Exception) -> str:
     return f"Error al exportar: {exc}"
+
+
+_PARTITION_LABELS = {
+    "resultantes": "resultantes (activas)",
+    "filtradas": "filtradas (excluidas)",
+    "ambas": "ambas (conjunto completo)",
+}
+
+
+def format_db_path_label(source_path: Path, partition: ExportPartition | None) -> str:
+    """Etiqueta bajo "Seleccionar base de datos…": la ruta del archivo, y qué partición
+    está cargada si el origen es una exportación filtrada.
+
+    Sin esa segunda parte, cambiar de partición no tenía ninguna confirmación visible:
+    la única señal era que las gráficas cambiaran, lo que es indistinguible de "no pasó
+    nada" cuando la partición elegida está vacía.
+    """
+    if partition is None:
+        return str(source_path)
+    return f"{source_path} — partición: {_PARTITION_LABELS.get(partition, partition)}"
+
+
+def resolve_partition_change(
+    current_partition: ExportPartition | None, requested_partition: ExportPartition | None
+) -> ExportPartition | None:
+    """Qué partición debe recargarse al mover el selector, o ``None`` si no hay nada
+    que hacer.
+
+    ``None`` en tres casos, todos legítimos y silenciosos: no hay dataset cargado, el
+    origen cargado no es una exportación filtrada (el selector es inerte para los otros
+    dos formatos, tal como anuncia su descripción), o ya se está viendo esa misma
+    partición.
+    """
+    if current_partition is None or requested_partition is None:
+        return None
+    if requested_partition == current_partition:
+        return None
+    return requested_partition

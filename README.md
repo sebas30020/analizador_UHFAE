@@ -113,10 +113,15 @@ ambientales/eventos del experimento. La escritura corre en segundo plano, sin bl
 la interfaz mientras dura.
 
 El archivo exportado se puede volver a abrir con **"Seleccionar base de datos…"** como
-un origen más: el selector **"Partición a cargar"** elige si se carga solo lo
-resultante, solo lo filtrado, o ambas particiones recombinadas (el conjunto original
-completo, indistinguible de antes de filtrar). Ese selector es inerte para los otros dos
-formatos de origen.
+un origen más. Con él cargado, el selector **"Partición visible"** cambia al instante
+qué señales se ven — resultantes, filtradas, o ambas recombinadas (el conjunto original
+completo, indistinguible de antes de filtrar) — recargando el archivo ya abierto, sin
+volver a pasar por el explorador. La etiqueta bajo el botón dice siempre qué partición
+está cargada.
+
+Cambiar de partición **reinicia el filtrado**: cada partición es un conjunto de señales
+distinto, no una vista del mismo. El selector es inerte para los otros dos formatos de
+origen, que no tienen particiones.
 
 ---
 

@@ -13,6 +13,7 @@ from ui.callbacks.helpers import (
     decode_metric_option,
     default_export_filename,
     encode_metric_option,
+    format_db_path_label,
     format_export_done_message,
     format_export_error_message,
     format_export_starting_message,
@@ -21,6 +22,7 @@ from ui.callbacks.helpers import (
     resolve_map_axis_status,
     resolve_map_click_signal_index,
     resolve_nav_index,
+    resolve_partition_change,
 )
 
 
@@ -283,3 +285,34 @@ def test_format_export_done_message():
 
 def test_format_export_error_message():
     assert format_export_error_message(OSError("disco lleno")) == "Error al exportar: disco lleno"
+
+
+# --- Selector de partición visible (exportación filtrada) ---
+
+def test_format_db_path_label_without_partition_is_just_the_path():
+    assert format_db_path_label(Path("/datos/med.hdf5"), None) == "/datos/med.hdf5"
+
+
+def test_format_db_path_label_names_the_loaded_partition():
+    label = format_db_path_label(Path("/datos/exp.hdf5"), "filtradas")
+    assert label == "/datos/exp.hdf5 — partición: filtradas (excluidas)"
+
+
+def test_resolve_partition_change_reloads_on_a_real_change():
+    assert resolve_partition_change("resultantes", "filtradas") == "filtradas"
+    assert resolve_partition_change("filtradas", "ambas") == "ambas"
+
+
+def test_resolve_partition_change_is_inert_for_a_non_export_origin():
+    # current_partition None = el archivo cargado no es una exportación filtrada:
+    # el selector no debe recargar nada (med_5_ago_3.hdf5, Keysight).
+    assert resolve_partition_change(None, "filtradas") is None
+
+
+def test_resolve_partition_change_is_inert_when_already_showing_it():
+    # Re-seleccionar la partición ya visible no debe disparar una recarga completa.
+    assert resolve_partition_change("filtradas", "filtradas") is None
+
+
+def test_resolve_partition_change_handles_missing_request():
+    assert resolve_partition_change("resultantes", None) is None

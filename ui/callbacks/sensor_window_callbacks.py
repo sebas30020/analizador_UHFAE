@@ -32,6 +32,7 @@ from ui.callbacks.helpers import (
     clamp_index,
     decode_metric_option,
     default_export_filename,
+    format_db_path_label,
     format_export_done_message,
     format_export_error_message,
     format_export_starting_message,
@@ -39,6 +40,7 @@ from ui.callbacks.helpers import (
     resolve_map_axis_status,
     resolve_map_click_signal_index,
     resolve_nav_index,
+    resolve_partition_change,
     resolve_reference_line_display,
     resolve_sensor_availability_notice,
 )
@@ -242,7 +244,34 @@ def register_callbacks(app: Dash) -> None:
             raise PreventUpdate
         state = get_state()
         dataset = state.load_dataset(path, partition=partition or "resultantes")
-        return str(dataset.source_path), (current_version or 0) + 1
+        return format_db_path_label(dataset.source_path, dataset.partition), (current_version or 0) + 1
+
+    @app.callback(
+        Output("db-path-label", "children", allow_duplicate=True),
+        Output("dataset-version", "data", allow_duplicate=True),
+        Input("load-partition", "value"),
+        State("dataset-version", "data"),
+        prevent_initial_call=True,
+    )
+    def _on_change_partition(partition: ExportPartition | None, current_version: int | None):
+        """Cambiar de partición recarga el archivo ya abierto, en vivo.
+
+        Sin esto el selector solo se leía al pulsar "Seleccionar base de datos…", así que
+        moverlo con un archivo ya cargado no hacía absolutamente nada -- el usuario veía
+        las señales de la partición anterior y no había forma de saber por qué. Recargar
+        es lo correcto y no un atajo: dos particiones son conjuntos de señales distintos
+        (``dataset_id`` distinto, ver ``FilteredExportReader.dataset_id``), no una vista
+        filtrada del mismo conjunto, así que no se pueden intercambiar en memoria.
+        """
+        state = get_state()
+        dataset = state.dataset
+        if dataset is None:
+            raise PreventUpdate
+        target = resolve_partition_change(dataset.partition, partition)
+        if target is None:
+            raise PreventUpdate
+        reloaded = state.load_dataset(dataset.source_path, partition=target)
+        return format_db_path_label(reloaded.source_path, reloaded.partition), (current_version or 0) + 1
 
     # --- Exportación de datos filtrados (Fase 6) -------------------------------------
     #

@@ -71,6 +71,7 @@ def build_control_panel(
     sensor: SensorName,
     initial_db_label: str = "Ningún archivo cargado",
     initial_filter_status: str = "0/0 señales activas · 0 filtro(s) aplicado(s)",
+    initial_partition: str = "resultantes",
 ) -> html.Div:
     return html.Div(
         className="control-panel",
@@ -78,11 +79,13 @@ def build_control_panel(
             html.Button("Seleccionar base de datos…", id="btn-select-db", n_clicks=0),
             html.Div(id="db-path-label", children=initial_db_label, className="db-path-label"),
             html.Div(
-                title="Solo aplica si el archivo elegido es una exportación filtrada de esta misma "
+                title="Cambia al instante qué señales se ven, recargando el archivo ya abierto. "
+                      "Solo aplica si el archivo cargado es una exportación filtrada de esta misma "
                       "herramienta (botón \"Exportar datos filtrados…\" más abajo); se ignora para "
-                      "cualquier otro origen (med_5_ago_3.hdf5, Keysight).",
+                      "cualquier otro origen (med_5_ago_3.hdf5, Keysight). Cambiar de partición "
+                      "reinicia el filtrado, porque cada partición es un conjunto de señales distinto.",
                 children=[
-                    html.Label("Partición a cargar (solo archivos exportados)"),
+                    html.Label("Partición visible (solo archivos exportados)"),
                     dcc.RadioItems(
                         id="load-partition",
                         options=[
@@ -90,7 +93,7 @@ def build_control_panel(
                             {"label": " Filtradas (excluidas)", "value": "filtradas"},
                             {"label": " Ambas (conjunto completo)", "value": "ambas"},
                         ],
-                        value="resultantes",
+                        value=initial_partition,
                     ),
                 ],
             ),

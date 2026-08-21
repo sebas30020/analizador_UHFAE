@@ -23,6 +23,7 @@ from ui.callbacks.helpers import (
     AUTOPLAY_SPEED_OPTIONS_HZ,
     VALID_SENSORS,
     autoplay_interval_ms,
+    format_db_path_label,
     resolve_sensor_availability_notice,
 )
 from ui.components.control_panel import build_control_panel
@@ -36,7 +37,15 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
 
     state = get_state()
     dataset = state.dataset
-    initial_db_label = str(dataset.source_path) if dataset is not None else "Ningún archivo cargado"
+    initial_db_label = (
+        format_db_path_label(dataset.source_path, dataset.partition)
+        if dataset is not None
+        else "Ningún archivo cargado"
+    )
+    # Una pestaña recién abierta debe mostrar la partición REALMENTE cargada, no el valor
+    # por defecto del control: si no, el selector diría "resultantes" mientras se están
+    # viendo las filtradas, y volver a "resultantes" parecería no hacer nada.
+    initial_partition = dataset.partition if dataset is not None and dataset.partition else "resultantes"
     other_sensors = [s for s in VALID_SENSORS if s != sensor]
     initial_filter_status = format_filter_status(*state.get_filter_counts(sensor))
     sensor_has_signals = dataset is not None and sensor in dataset.blocks and dataset.blocks[sensor].data.shape[0] > 0
@@ -75,7 +84,12 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
                             for other in other_sensors
                         ],
                     ),
-                    build_control_panel(sensor, initial_db_label=initial_db_label, initial_filter_status=initial_filter_status),
+                    build_control_panel(
+                        sensor,
+                        initial_db_label=initial_db_label,
+                        initial_filter_status=initial_filter_status,
+                        initial_partition=initial_partition,
+                    ),
                 ],
             ),
             html.Div(
