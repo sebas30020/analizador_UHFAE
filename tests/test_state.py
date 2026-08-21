@@ -1,6 +1,12 @@
+import gc
+import threading
+import time
+import weakref
+
 import numpy as np
 import pytest
 
+from cache.warmup import WarmupSpec
 from core.models import EnvironmentalSeries, EventSeries, SignalBlock
 from ui.state import AppState, compute_t0
 
@@ -209,3 +215,70 @@ def test_load_hdf5_after_keysight_still_populates_uhf_and_ae(app_state, syntheti
     dataset = app_state.load_dataset(synthetic_hdf5)
     assert set(dataset.blocks.keys()) == {"UHF", "AE"}
     assert app_state.get_active_mask("UHF_KS").shape[0] == 0
+
+
+# --- Cancelación del precalentamiento al cambiar de dataset ------------------------
+# Ver archivos_md/CONTINUAR_DIAGNOSTICO_RENDIMIENTO.md §7: el hilo de warmup del dataset
+# anterior seguía vivo tras cargar otro archivo, reteniendo su matriz completa.
+
+
+def test_load_dataset_cancels_the_previous_warmup(tmp_path, synthetic_hdf5):
+    state = AppState(cache_dir=tmp_path / "cache", warmup_on_load=True)
+
+    state.load_dataset(synthetic_hdf5)
+    primera = state._warmup_cancel
+    assert primera is not None and not primera.is_set()
+
+    state.load_dataset(synthetic_hdf5)
+
+    assert primera.is_set(), "el warmup anterior debe quedar cancelado al cargar otro dataset"
+    segunda = state._warmup_cancel
+    assert segunda is not None and segunda is not primera and not segunda.is_set()
+
+    for hilo in threading.enumerate():
+        if hilo.name == "cache-warmup":
+            hilo.join(timeout=30)
+
+
+def test_load_dataset_releases_the_previous_dataset_matrix(tmp_path, monkeypatch, synthetic_hdf5):
+    """El síntoma que importa: la matriz del dataset anterior debe liberarse sin esperar
+    a que termine su precalentamiento.
+
+    El warmup se alarga a propósito (una spec lenta, muchas veces) porque con las 9 specs
+    reales sobre el fixture sintético el hilo termina en milisegundos y la prueba pasaría
+    igual con el bug puesto. Lo que se afirma es que la matriz se libera **mientras el
+    warmup todavía tendría trabajo pendiente**.
+    """
+    liberado = threading.Event()
+
+    def _lento(*args, **kwargs):
+        # Cede el GIL en cada spec: sin cancelación, el hilo seguiría vivo -- y
+        # reteniendo la matriz -- durante todo el bucle.
+        liberado.wait(timeout=10.0)
+        return np.array([]), np.array([])
+
+    monkeypatch.setattr("cache.warmup.get_or_compute_puntual", _lento)
+    monkeypatch.setattr(
+        "ui.state.default_warmup_specs",
+        lambda sensor, **kw: [WarmupSpec(sensor=sensor, metric_id="rms", regimen="puntual")] * 20,
+    )
+
+    state = AppState(cache_dir=tmp_path / "cache", warmup_on_load=True)
+    primero = state.load_dataset(synthetic_hdf5)
+    matriz = weakref.ref(primero.blocks["UHF"].data)
+    del primero
+
+    state.load_dataset(synthetic_hdf5)  # debe cancelar el warmup anterior
+
+    try:
+        for _ in range(150):  # el hilo termina la spec en curso antes de salir
+            gc.collect()
+            if matriz() is None:
+                break
+            time.sleep(0.1)
+        assert matriz() is None, "la matriz del dataset anterior sigue retenida por el warmup"
+    finally:
+        liberado.set()
+        for hilo in threading.enumerate():
+            if hilo.name == "cache-warmup":
+                hilo.join(timeout=30)

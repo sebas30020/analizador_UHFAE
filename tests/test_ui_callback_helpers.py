@@ -289,13 +289,20 @@ def test_format_export_error_message():
 
 # --- Selector de partición visible (exportación filtrada) ---
 
+# La ruta esperada se construye con el mismo ``Path`` que usa la función: escribirla a
+# mano con "/" ataba estas dos pruebas a POSIX y las hacía fallar en Windows, que es la
+# plataforma de la herramienta (``str(Path("/datos/med.hdf5"))`` -> "\datos\med.hdf5").
+
+
 def test_format_db_path_label_without_partition_is_just_the_path():
-    assert format_db_path_label(Path("/datos/med.hdf5"), None) == "/datos/med.hdf5"
+    ruta = Path("/datos/med.hdf5")
+    assert format_db_path_label(ruta, None) == str(ruta)
 
 
 def test_format_db_path_label_names_the_loaded_partition():
-    label = format_db_path_label(Path("/datos/exp.hdf5"), "filtradas")
-    assert label == "/datos/exp.hdf5 — partición: filtradas (excluidas)"
+    ruta = Path("/datos/exp.hdf5")
+    label = format_db_path_label(ruta, "filtradas")
+    assert label == f"{ruta} — partición: filtradas (excluidas)"
 
 
 def test_resolve_partition_change_reloads_on_a_real_change():

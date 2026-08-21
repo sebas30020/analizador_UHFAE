@@ -61,6 +61,14 @@ detectar regresiones de orden de magnitud, no para comparar diferencias del 20 %
 comparar dos versiones del código hay que correr ambas seguidas, en la misma máquina y
 sin otra carga.
 
+Una remedición del 2026-08-21 en la misma máquina lo confirma con creces: la misma
+llamada a `load_dataset` sobre el mismo archivo dio entre **10,8 s y 41,1 s** en un mismo
+rato, contra los 6,7 s archivados aquí, y el resto de operaciones salió de forma pareja
+2-2,5x por encima. El factor era la memoria libre de la máquina (5,1 GB de 16,9 GB), no
+el código. Detalle en
+[`archivos_md/DIAGNOSTICO_RENDIMIENTO_RESULTADO.md`](../archivos_md/DIAGNOSTICO_RENDIMIENTO_RESULTADO.md)
+§4: **antes de culpar a un cambio, hay que mirar cuánta RAM libre hay.**
+
 Con esa advertencia, hay un matiz que sí importa: en `Filtro + propagación` la **mediana**
 cumple el umbral de 200 ms en ambos sensores, pero las muestras individuales más lentas lo
 excedieron (202 ms en UHF, 220 ms en AE). Es decir: cumple de forma típica, pero no con

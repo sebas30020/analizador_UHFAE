@@ -122,6 +122,12 @@ class AppState:
         # un dataset, en un hilo daemon. Los benchmarks lo apagan (``warmup_on_load=False``)
         # para que no contamine la medición de "caché frío" compitiendo por CPU.
         self._warmup_on_load = warmup_on_load
+        # Señal de cancelación del precalentamiento en curso. Cargar un dataset nuevo
+        # deja obsoleto al anterior: su hilo seguiría calculando métricas que ya nadie
+        # va a mirar y, peor, manteniendo viva su matriz completa (medido: 234 MB con
+        # test-6.h5, ~1 GB con med_5_ago_3.hdf5) hasta terminar -- hasta ~63 s después.
+        # Ver archivos_md/CONTINUAR_DIAGNOSTICO_RENDIMIENTO.md §7.
+        self._warmup_cancel: threading.Event | None = None
         self._dataset_version = 0  # 0 = "sin dataset cargado"; se incrementa en cada load_dataset()
         self.cache = SqliteHdf5CacheBackend(cache_dir)
 
@@ -157,6 +163,11 @@ class AppState:
         subconjunto cargar (activas, excluidas, o ambas recombinadas) -- inerte para
         los otros dos formatos.
         """
+        # Se cancela ANTES de ingerir, no al final: la ingesta es la etapa cara (medido:
+        # 11-41 s con med_5_ago_3.hdf5) y es justo cuando menos conviene tener un hilo
+        # de precalentamiento obsoleto disputando CPU y reteniendo la matriz anterior.
+        self._cancel_pending_warmup()
+
         sensor_configs = load_sensor_configs(self._sensors_config_path)
         with open_reader(path, partition=partition) as reader:
             # Solo una exportación filtrada tiene particiones; para los otros dos
@@ -220,10 +231,28 @@ class AppState:
                 for spec in default_warmup_specs(sensor)
             ]
             if specs:
+                cancel = threading.Event()
+                with self._lock:
+                    self._warmup_cancel = cancel
                 start_background_warmup(
-                    self._cache_dir, dataset.blocks, dataset.sensor_configs, dataset.dataset_id, specs
+                    self._cache_dir, dataset.blocks, dataset.sensor_configs, dataset.dataset_id, specs,
+                    cancelled=cancel,
                 )
         return dataset
+
+    def _cancel_pending_warmup(self) -> None:
+        """Señala al precalentamiento en curso (si lo hay) que abandone.
+
+        No espera a que el hilo muera: cortar es un ahorro, no una precondición, y
+        bloquear aquí congelaría la interfaz justo lo que se quiere evitar. El hilo
+        termina la métrica que tenga entre manos y sale antes de empezar la siguiente.
+        Lo ya calculado queda en el caché y sigue siendo válido -- la clave incluye el
+        ``dataset_id``, así que nada de eso se confunde con el dataset nuevo.
+        """
+        with self._lock:
+            cancel, self._warmup_cancel = self._warmup_cancel, None
+        if cancel is not None:
+            cancel.set()
 
     @property
     def dataset(self) -> LoadedDataset | None:

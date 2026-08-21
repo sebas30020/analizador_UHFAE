@@ -1,3 +1,4 @@
+import threading
 import time
 
 import numpy as np
@@ -137,3 +138,62 @@ def test_background_warmup_result_is_readable_from_a_fresh_backend(tmp_path, sen
     reader = SqliteHdf5CacheBackend(cache_dir)
     assert reader.stats()["total_entries"] == len(default_warmup_specs("UHF"))
     reader.close()
+
+
+# --- Cancelación del precalentamiento obsoleto -------------------------------------
+# Diagnóstico de rendimiento (archivos_md/CONTINUAR_DIAGNOSTICO_RENDIMIENTO.md §7):
+# cargar un archivo nuevo dejaba corriendo el warmup del anterior, que además retenía
+# su matriz completa (medido: 234 MB con test-6.h5, ~1 GB con med_5_ago_3.hdf5) hasta
+# terminar -- hasta ~63 s de CPU y RAM gastadas en un dataset que ya nadie mira.
+
+
+def test_warm_cache_stops_when_cancelled_before_starting(tmp_path, sensor_config, block):
+    cache = SqliteHdf5CacheBackend(tmp_path / "cache")
+    cancelled = threading.Event()
+    cancelled.set()
+
+    done = warm_cache(cache, {"UHF": block}, {"UHF": sensor_config}, "ds1",
+                      default_warmup_specs("UHF"), cancelled=cancelled)
+
+    assert done == []
+    assert cache.stats()["total_entries"] == 0
+    cache.close()
+
+
+def test_warm_cache_cancelled_midway_keeps_what_it_already_computed(tmp_path, sensor_config, block):
+    # Se cancela desde dentro del cálculo de la primera spec: la segunda ya no debe
+    # empezar, pero lo calculado antes queda en el caché (es válido: la clave incluye
+    # el dataset_id, no se confunde con ningún otro dataset).
+    cache = SqliteHdf5CacheBackend(tmp_path / "cache")
+    cancelled = threading.Event()
+    specs = [
+        WarmupSpec(sensor="UHF", metric_id="rms", regimen="puntual"),
+        WarmupSpec(sensor="UHF", metric_id="vmax", regimen="puntual"),
+    ]
+
+    original = SqliteHdf5CacheBackend.put
+
+    def put_and_cancel(self, *args, **kwargs):
+        cancelled.set()
+        return original(self, *args, **kwargs)
+
+    SqliteHdf5CacheBackend.put = put_and_cancel
+    try:
+        done = warm_cache(cache, {"UHF": block}, {"UHF": sensor_config}, "ds1", specs, cancelled=cancelled)
+    finally:
+        SqliteHdf5CacheBackend.put = original
+
+    assert done == ["rms"]  # vmax no llegó a empezar
+    assert cache.stats()["total_entries"] == 1
+    cache.close()
+
+
+def test_warm_cache_without_cancel_event_computes_everything(tmp_path, sensor_config, block):
+    # El parámetro es opcional: no pasarlo debe reproducir el comportamiento previo.
+    cache = SqliteHdf5CacheBackend(tmp_path / "cache")
+    specs = default_warmup_specs("UHF")
+
+    done = warm_cache(cache, {"UHF": block}, {"UHF": sensor_config}, "ds1", specs)
+
+    assert len(done) == len(specs)
+    cache.close()

@@ -1,5 +1,11 @@
 # Continuación: diagnóstico de rendimiento (sesión local)
 
+> **CERRADO (2026-08-21).** El diagnóstico se hizo y sus resultados están en
+> [`DIAGNOSTICO_RENDIMIENTO_RESULTADO.md`](DIAGNOSTICO_RENDIMIENTO_RESULTADO.md).
+> Este documento queda como registro del plan y de lo que ya se había descartado.
+> Ojo antes de reusarlo: la medición **refutó** sus dos hipótesis principales (§6) —
+> el caché no estaba frío y el lock del caché no bloquea la interfaz.
+
 > **Cómo usar este documento.** Abre Claude Code en la terminal, dentro de la carpeta del
 > proyecto, y pega como primer mensaje:
 >

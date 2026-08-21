@@ -63,11 +63,26 @@ def warm_cache(
     sensor_configs: dict[SensorName, SensorConfig],
     dataset_id: str,
     specs: list[WarmupSpec],
+    cancelled: threading.Event | None = None,
 ) -> list[str]:
     """Ejecuta el precalentamiento síncronamente sobre ``cache``. Retorna los
-    ``metric_id`` efectivamente calculados/verificados (en orden)."""
+    ``metric_id`` efectivamente calculados/verificados (en orden).
+
+    ``cancelled``: si se señala, el bucle corta **entre** especificaciones y retorna lo
+    que alcanzó a calcular. La granularidad es deliberadamente la spec, no algo más fino:
+    una métrica puntual es una sola llamada vectorizada de numpy sobre la matriz entera y
+    no hay dónde interrumpirla. Lo que importa es que el corte ocurra antes de empezar la
+    siguiente, que es donde está el trabajo caro (medido: `kurtosis` sobre las 20 574
+    señales AE de med_5_ago_3 tarda ~26 s ella sola).
+    """
     done: list[str] = []
     for spec in specs:
+        if cancelled is not None and cancelled.is_set():
+            _logger.info(
+                "etapa=cache.warmup evento=cancelado dataset_id=%s calculadas=%d de=%d",
+                dataset_id, len(done), len(specs),
+            )
+            break
         if spec.sensor not in blocks:
             continue
         block = blocks[spec.sensor]
@@ -110,13 +125,21 @@ def start_background_warmup(
     dataset_id: str,
     specs: list[WarmupSpec],
     on_complete: Callable[[list[str]], None] | None = None,
+    cancelled: threading.Event | None = None,
 ) -> threading.Thread:
-    """Lanza ``warm_cache`` en un hilo daemon y retorna de inmediato (no bloquea)."""
+    """Lanza ``warm_cache`` en un hilo daemon y retorna de inmediato (no bloquea).
+
+    ``cancelled`` se propaga a ``warm_cache``: quien lance el hilo puede señalarlo para
+    que abandone un dataset que ya no está en pantalla. Además de ahorrar CPU, cortar
+    libera ``blocks`` -- mientras el hilo corre, el marco de ``_run`` mantiene viva la
+    matriz completa del sensor (~1 GB en med_5_ago_3.hdf5), aunque la interfaz ya haya
+    cargado otro archivo.
+    """
 
     def _run() -> None:
         cache = SqliteHdf5CacheBackend(cache_dir)
         try:
-            done = warm_cache(cache, blocks, sensor_configs, dataset_id, specs)
+            done = warm_cache(cache, blocks, sensor_configs, dataset_id, specs, cancelled=cancelled)
         except Exception:
             # El precalentamiento es puro adelanto de trabajo: si una métrica falla
             # (dataset degenerado, métrica retirada del registro), la aplicación debe
