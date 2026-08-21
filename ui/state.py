@@ -233,6 +233,15 @@ class AppState:
             if specs:
                 cancel = threading.Event()
                 with self._lock:
+                    # Se vuelve a señalar bajo el mismo lock que publica el nuevo Event.
+                    # No es redundante con el _cancel_pending_warmup() del inicio: entre
+                    # aquel y esta línea pasa la ingesta entera (11-41 s medidos), tiempo
+                    # de sobra para que OTRA carga -- una segunda pestaña, el selector de
+                    # partición -- haya publicado su propio Event. Sin este set, ese
+                    # warmup quedaría huérfano: nadie más lo cancelaría y correría hasta
+                    # el final reteniendo su matriz, que es el defecto que se corrige.
+                    if self._warmup_cancel is not None:
+                        self._warmup_cancel.set()
                     self._warmup_cancel = cancel
                 start_background_warmup(
                     self._cache_dir, dataset.blocks, dataset.sensor_configs, dataset.dataset_id, specs,

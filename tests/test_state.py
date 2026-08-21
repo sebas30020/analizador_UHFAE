@@ -282,3 +282,55 @@ def test_load_dataset_releases_the_previous_dataset_matrix(tmp_path, monkeypatch
         for hilo in threading.enumerate():
             if hilo.name == "cache-warmup":
                 hilo.join(timeout=30)
+
+
+def test_publishing_a_warmup_cancels_one_left_by_a_concurrent_load(tmp_path, monkeypatch, synthetic_hdf5):
+    """Carrera estrecha entre dos cargas solapadas (dos pestañas, o el selector de
+    partición mientras otra carga sigue en curso).
+
+    Ambas pasan por ``_cancel_pending_warmup()`` viendo ``None``, porque entre esa
+    llamada y la publicación del Event propio media la ingesta entera (11-41 s medidos
+    con med_5_ago_3.hdf5). Si la que termina primero publica su Event y la otra lo
+    sobrescribe sin señalarlo, ese warmup queda huérfano: nadie volverá a cancelarlo y
+    correrá hasta el final reteniendo su matriz -- exactamente el defecto que se
+    corrigió, en una ventana más estrecha.
+    """
+    import ui.state as ui_state
+
+    real_ingest = ui_state.ingest_experiment
+    primera_ingesta_en_curso = threading.Event()
+    soltar = threading.Event()
+    n_llamadas = []
+
+    def _ingest_con_pausa(*args, **kwargs):
+        n_llamadas.append(1)
+        if len(n_llamadas) == 1:  # solo la primera carga se queda esperando
+            primera_ingesta_en_curso.set()
+            soltar.wait(timeout=10.0)
+        return real_ingest(*args, **kwargs)
+
+    monkeypatch.setattr("ui.state.ingest_experiment", _ingest_con_pausa)
+
+    state = AppState(cache_dir=tmp_path / "cache", warmup_on_load=True)
+
+    lenta = threading.Thread(target=lambda: state.load_dataset(synthetic_hdf5), daemon=True)
+    lenta.start()
+    assert primera_ingesta_en_curso.wait(timeout=10.0), "la primera carga no llegó a la ingesta"
+
+    # La segunda carga adelanta a la primera y publica su Event mientras aquella sigue
+    # ingiriendo.
+    state.load_dataset(synthetic_hdf5)
+    huerfano = state._warmup_cancel
+    assert huerfano is not None and not huerfano.is_set()
+
+    try:
+        soltar.set()  # la primera carga termina y publica el suyo encima del anterior
+        lenta.join(timeout=30)
+        assert huerfano.is_set(), (
+            "publicar un warmup nuevo debe cancelar el que hubiera guardado otra carga concurrente"
+        )
+    finally:
+        soltar.set()
+        for hilo in threading.enumerate():
+            if hilo.name == "cache-warmup":
+                hilo.join(timeout=30)

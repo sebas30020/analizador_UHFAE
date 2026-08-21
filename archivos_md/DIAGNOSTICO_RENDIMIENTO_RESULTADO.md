@@ -96,6 +96,21 @@ de retenerse el warmup entero, y solo queda un hilo vivo.
 Lo ya calculado se conserva en el caché y sigue siendo válido: la clave incluye el
 `dataset_id`, así que nada se confunde con el dataset nuevo.
 
+**Dos matices sobre el alcance del corte**, añadidos al revisar el arreglo:
+
+- **La cota real no es 1,6 s.** El corte se comprueba al inicio de cada spec, así que un
+  warmup cancelado termina la métrica que tenga en curso antes de salir. Los 1,6 s son el
+  caso favorable; el peor caso es la duración de la métrica más lenta (`kurtosis` sobre
+  AE: ~26 s). No hay forma de mejorarlo sin interrumpir una llamada vectorizada de numpy,
+  que no es interrumpible.
+- **Publicar un Event también cancela el que hubiera.** Entre el
+  `_cancel_pending_warmup()` del inicio y la publicación del Event propio media la
+  ingesta entera (11-41 s), tiempo de sobra para que otra carga concurrente — una segunda
+  pestaña, el selector de partición — publique el suyo. Sin señalar al publicar, ese
+  warmup quedaba huérfano: nadie volvería a cancelarlo y correría hasta el final
+  reteniendo su matriz, el defecto original en una ventana más estrecha. Cubierto por
+  `test_publishing_a_warmup_cancels_one_left_by_a_concurrent_load`, comprobada en rojo.
+
 Verificado también en la aplicación real (el diálogo de archivo es nativo, así que se usó
 el selector de partición, que recorre el mismo `load_dataset`):
 
@@ -192,7 +207,7 @@ plan anterior): §2.2 muestra que ese lock no es un cuello de botella.
 Las dos pruebas nuevas de `test_state.py` se comprobaron **en rojo** desactivando el
 arreglo, para que no sean pruebas vacías.
 
-**421 pruebas pasan.** `mypy core data metrics cache ui viz utils`: 28 errores, todos
+**422 pruebas pasan.** `mypy core data metrics cache ui viz utils`: 28 errores, todos
 `import-untyped` por falta de *stubs* de `h5py`/`plotly`/`scipy`/`joblib` — el ruido
 preexistente ya documentado, ninguno en los archivos tocados.
 
