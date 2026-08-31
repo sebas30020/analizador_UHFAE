@@ -109,9 +109,11 @@ sobre un subconjunto filtrado. El filtrado interactivo del usuario se aplica enc
 
 - Régimen puntual: filtro posterior en memoria sobre el resultado cacheado. Excluir una
   señal no cambia el valor de las demás, así que nunca hace falta recalcular.
-- Régimen grupo: **bypass total** del caché. El agregado de un grupo sí cambia al excluir
-  una señal, así que se recalcula; escribir ese resultado filtrado en el caché lo
-  envenenaría para la vista sin filtro.
+- Régimen grupo: **bypass total** del caché cuando la máscara excluye al menos una señal. El
+  agregado de un grupo sí cambia al excluir una señal, así que se recalcula; escribir ese
+  resultado filtrado en el caché lo envenenaría para la vista sin filtro. Cuando la máscara no
+  excluye ninguna señal (o es `None`), el régimen de grupo consulta y persiste en el caché con
+  normalidad, aprovechando el precalentamiento.
 
 ## 6. Presentación
 

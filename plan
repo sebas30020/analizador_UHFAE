@@ -1,177 +1,116 @@
-# Fusionar dos bases de datos en una desde la GUI
+# Que una máscara que no filtra nada deje de bypasear el caché
 
 ## Contexto
 
-El manejo de archivos ya cubre un ciclo completo: abrir un origen (tres formatos
-reconocidos por contenido, `data/readers/factory.py`), filtrar, exportar el resultado a un
-HDF5 propio (`data/export.py`) y volver a abrirlo como un origen más
-(`data/readers/filtered_export_reader.py`).
+Las métricas de régimen de grupo (`grupo_reduccion` y `grupo_intrinseca`) bypasean el
+caché cuando hay filtrado activo, y con razón: la mediana de un grupo cambia si excluyes
+señales, así que escribir ese resultado envenenaría la vista sin filtro
+(`docs/ARQUITECTURA.md` §5, invariante en `CLAUDE.md`). El bypass se decide con
+`if active_mask is not None` — [cache/service.py:94](cache/service.py:94) y
+[cache/service.py:145](cache/service.py:145).
 
-Falta el paso siguiente: **tomar dos tests independientes y volverlos uno solo**,
-eligiendo ambos archivos desde la interfaz. Las entradas pueden ser originales o
-exportaciones filtradas; solo se fusionan archivos de la misma estructura entre sí (no se
-mezcla un `med_5_ago_*.hdf5` con un Keysight `test-*.h5`).
+El problema es que **`active_mask` nunca es `None` en la app**:
 
-## Decisiones tomadas
+- `AppState.get_active_mask()` devuelve un array todo-`True` cuando no hay nada filtrado,
+  nunca `None` — [ui/state.py:333](ui/state.py:333).
+- El callback lo pasa siempre, sin condición —
+  [sensor_window_callbacks.py:866](ui/callbacks/sensor_window_callbacks.py:866).
+- No hay ningún sitio que convierta una máscara todo-`True` en `None` (verificado por
+  búsqueda en `ui/` y `cache/`).
 
-**Orden cronológico: el archivo 2 se coloca inmediatamente después del archivo 1.** Los
-timestamps absolutos no importan; lo que importa es la duración relativa del experimento.
-El archivo 2 conserva sus distancias internas pero se desplaza en bloque para arrancar
-donde termina el 1, de modo que el eje de minutos transcurridos siga acumulando. Esto hace
-que **el orden en que se eligen los archivos sea semántico**, no cosmético: la interfaz
-debe decirlo.
+Consecuencia: **las métricas de grupo nunca usan el caché, ni siquiera sin ningún filtro
+aplicado.** La rama cacheada de esas dos funciones solo es alcanzable desde tests y
+benchmarks. Cada refresco de la ventana las recalcula enteras: cambiar la ventana de
+agrupamiento, alternar el suavizado o añadir otra métrica recalcula también las de grupo
+que ya estaban en pantalla y no habían cambiado.
 
-Consecuencia asumida: para las señales del archivo 2, el timestamp UTC absoluto que muestra
-`ui/components/metadata_panel.py` ya no será el real de adquisición. Para no perder el dato
-se guarda el timestamp original por señal (ver *Procedencia*); cablearlo al panel queda
-fuera de alcance.
+Peor, y es lo que cierra el caso: **el precalentamiento está calculando resultados que
+nadie lee jamás.** `default_warmup_specs` incluye `tasa_pulsos`, `tasa_energia` y
+`tasa_rafagas` en régimen `grupo_intrinseca` con `by_time`/`60.0`
+([cache/warmup.py:44](cache/warmup.py:44)), y `warm_cache` las calcula y persiste sin
+máscara ([cache/warmup.py:100](cache/warmup.py:100)). Se escriben en cada carga de dataset
+—compitiendo por CPU con la interfaz, que es justo lo que el precalentamiento existe para
+evitar— y después la app siempre entra por el bypass y no las mira. Y los valores por
+defecto del panel de control son `grouping-mode = "by_time"` y `grouping-value = 60.0`
+([control_panel.py:135](ui/components/control_panel.py:135) y `:142`), **exactamente** los
+del warmup: la clave coincide, así que hoy son aciertos de caché que no se consultan.
 
-**Particiones: todo va a `resultantes`.** Cada entrada aporta la partición que indique el
-selector "Partición visible" que ya existe (por defecto `resultantes`, inerte para orígenes
-que no son exportaciones). `filtradas` queda vacía en la salida y el filtrado se rehace
-desde cero sobre el archivo fusionado.
+## El cambio
 
-## Diseño
+Un solo punto, en `cache/service.py`: una máscara que no excluye nada es indistinguible
+de no tener filtro, así que se normaliza a `None` antes de decidir nada.
 
-**Dónde vive**: capa de datos pura, `data/merge.py` nuevo — sin Dash, sin caché, sin lock
-de `AppState`, la misma separación que `data/export.py`.
-
-**Formato de salida**: el mismo esquema que escribe `data/export.py`
-(`file_type = "AnalizadorUHFAE/FilteredExport"`), con todo en `resultantes`. Así el archivo
-fusionado se relee con `FilteredExportReader` y `open_reader` **sin una sola línea de
-código de lectura nueva**. Se sube `SCHEMA_VERSION` a 2 por los campos de procedencia;
-`is_filtered_export_file` solo mira `file_type` y no valida la versión, así que los
-archivos v1 existentes se siguen leyendo igual.
-
-### El desfase temporal
-
-Se calcula **una sola vez** y se aplica a todo el archivo 2 — señales de todos los
-sensores, ambientales y eventos. Calcularlo por sensor desincronizaría UHF y AE entre sí.
-
-Se basa **exclusivamente en las señales**, para no abrir un hueco visual irreal si un dato
-ambiental se registró minutos después de detener la adquisición:
-
-```
-t_fin_1  = máximo timestamp de TODAS las SEÑALES del archivo 1
-t_ini_2  = mínimo timestamp de TODAS las SEÑALES del archivo 2
-delta    = (t_fin_1 - t_ini_2) + separacion
+```python
+def _sin_exclusiones(active_mask: np.ndarray | None) -> np.ndarray | None:
+    """Una máscara todo-True no excluye nada, así que es equivalente a no tener filtro.
+    Normalizarla a None aquí es lo que permite que el régimen de grupo entre por el
+    caché cuando el usuario no ha filtrado: el bypass sigue siendo total en cuanto haya
+    una sola señal excluida."""
+    if active_mask is None or bool(active_mask.all()):
+        return None
+    return active_mask
 ```
 
-`separacion` = mediana de las diferencias entre timestamps consecutivos del sensor con más
-señales del archivo 1, o `0.0` si no se puede calcular (menos de dos señales). Continuar a
-la cadencia del propio archivo 1 hace que la costura parezca una adquisición que siguió, en
-vez de dejar dos señales compartiendo instante. Va documentada y guardada en los atributos.
+Se aplica en la primera línea de las tres funciones públicas: `get_or_compute_puntual`,
+`get_or_compute_group_reduction` y `get_or_compute_group_intrinsic`. No se toca ningún
+llamador.
 
-**El solape en la costura es esperado y va en ambos sentidos.** Ambientales y eventos del
-archivo 1 posteriores a `t_fin_1` conservan su timestamp y se superponen con el inicio del
-archivo 2. Y —esto no estaba dicho— ocurre lo simétrico: `esquema_med_5_ago_3.md` documenta
-`initial_dead_time_s = 300.0`, así que **los ambientales del archivo 2 normalmente empiezan
-~5 minutos antes de su primera señal** y, tras el desfase, caen sobre la cola del archivo 1.
-No es un caso raro: es el caso normal de este esquema. Al ser datos asíncronos es correcto,
-pero es visible: en la ventana de solape las curvas de temperatura y humedad tendrán puntos
-de los dos tests y la línea zigzagueará al ordenarlas. Por eso **la fusión calcula y reporta
-la duración del solape** en el mensaje de resultado, en vez de dejar que aparezca como una
-sorpresa en la gráfica. No se recorta nada: recortar perdería datos reales.
+**Por qué en `cache/service.py` y no en el callback**: es el único sitio donde la
+distinción "hay máscara / no hay máscara" significa algo. Ponerlo en el callback obligaría
+a repetirlo en cada llamada y dejaría fuera al camino de los mapas, que entra por
+`viz/maps.py::build_map_dataset` → `get_or_compute_puntual`. Y no puede ir en
+`get_active_mask()`: el resto de sus consumidores (envolvente de la gráfica #1, resolución
+del lazo, exportación) esperan un array, no `None`.
 
-### Escritura secuencial (memoria)
+## Por qué es seguro
 
-`med_5_ago_2.hdf5` son 714 MB en disco y la máquina tiene 15,7 GB; `data/ingest.py` ya
-advierte que construye la matriz global en RAM. Tener los dos datasets **más** la
-concatenación a la vez no cabe. Como el archivo 2 va entero después del 1, el orden fusionado
-es *todas las filas de 1, luego todas las de 2*, y se escribe secuencialmente:
+El resultado es **idéntico byte a byte**, no "equivalente":
 
-1. Ingerir el archivo 1 → guardar en RAM sus ambientales y eventos (son diminutos) → crear
-   el HDF5 con los datasets de señales redimensionables (`maxshape=(None, M)`) → escribir
-   sus filas → `del` del bloque.
-2. Ingerir el archivo 2 → aplicar `delta` a todo → concatenar ambientales/eventos a lo que
-   está en RAM → redimensionar los datasets y escribir a continuación → `del` del bloque.
-3. Escribir ambientales y eventos **una sola vez al final**, con `_write_environmental` y
-   `_write_events`: crean su grupo con `create_group`, así que llamarlos dos veces revienta
-   con "name already exists".
+- El motor combina la máscara en un único sitio,
+  [`_effective_mask`](metrics/engine.py:32): `valid_mask if extra_mask is None else (valid_mask & extra_mask)`.
+  Con `extra_mask` todo-`True`, `valid_mask & extra_mask == valid_mask`, que es exactamente
+  la rama de `None`.
+- Las dos ramas de cada función de grupo llaman a la **misma** función del motor con los
+  **mismos** `groups` (ambas hacen `resolve_groups(block.timestamps, ...)` con idénticos
+  argumentos). La única diferencia es pasar o no `extra_mask`.
+- En régimen puntual el recorte posterior con una máscara todo-`True` es un no-op que solo
+  gastaba una copia; ahora se evita.
+- La alineación de los mapas se mantiene: `viz/maps.py::_signal_indices` combina con la
+  misma regla (`block.valid_mask & active_mask`), así que sigue coincidiendo índice a
+  índice con lo que devuelve `get_or_compute_puntual`.
 
-Pico de RAM = el mayor de los dos archivos, no la suma.
+**El invariante que motivó el bypass queda intacto**: solo se entra al caché cuando está
+demostrado que no hay exclusión alguna, así que nunca se escribe un resultado filtrado. En
+cuanto haya una sola señal excluida, el bypass es total como hasta ahora.
 
-**Los helpers de `data/export.py` no son todos reutilizables tal cual.** `_chunk_rows`,
-`_write_environmental`, `_write_events` y la escritura de atributos del grupo de sensor sí.
-`_write_partition` **no**: crea grupo y datasets de una vez a partir de un bloque completo en
-memoria, que es justo lo contrario del patrón crear-y-luego-anexar que necesita la fusión.
-Hay que extraer los atributos de grupo a un helper compartido y escribir en `merge.py` sus
-propias funciones de creación y anexado.
+## Caso borde
 
-**Hay que escribir las dos particiones, no solo `resultantes`.** El reader lo da por hecho:
-`available_sensors()` devuelve `[]` si falta el grupo `resultantes` y enumera los sensores
-mirando solo ahí, y `sensor_config_overrides()` lee los atributos de
-`resultantes/<sensor>`. Además su docstring fija el invariante del formato: *"Cada sensor
-ingerido en el momento de exportar tiene grupo en AMBAS particiones, aunque una de las dos
-haya quedado vacía"*. Así que el archivo fusionado escribe, por cada sensor,
-`resultantes/<sensor>` con sus atributos completos y `filtradas/<sensor>` con cero filas.
-El reader tolera que falte `filtradas` (`iter_signal_batches` hace `continue`), pero
-saltárselo rompería un invariante documentado del formato a cambio de nada.
-
-### Procedencia
-
-Justifica subir la versión de esquema. Por señal: `source_file_index` (`uint8`, 0 o 1) y
-`source_timestamp` (`float64`, el original antes del desfase), además del `source_index` que
-ya se guarda. En atributos raíz: `merge_sources` (las dos rutas), `merge_time_offsets_s`
-(`[0.0, delta]`), `merge_signal_counts` y `merge_seam_overlap_s`. El atributo `experiment`
-se forma concatenando los orígenes (`"Fusión: exp1 + exp2"`), que es lo que
-`FilteredExportReader.list_experiments()` devolverá y la UI mostrará.
-
-Con esto la fusión es auditable y reversible; sin esto, reescribir timestamps sería
-destructivo.
-
-## Validaciones
-
-Se comprueban **antes** de escribir nada, y el mensaje nombra el desajuste concreto:
-
-- **Mismo conjunto de sensores** en ambas entradas. Es la traducción literal de "solo se une
-  una estructura con su propia estructura": un `med_5_ago_*` trae UHF+AE y un Keysight solo
-  UHF_KS.
-- **Mismo `n_samples` por sensor.** Duro: matrices `(N, M)` con distinto `M` no concatenan.
-- **Mismo `fs_hz` por sensor.** Duro: mezclarlos vuelve basura silenciosa toda métrica en
-  frecuencia. Ojo que `KeysightSegmentedReader.sensor_config_overrides()` los deriva del
-  archivo, así que dos Keysight distintos **sí** pueden diferir — ese es el caso real que
-  esta comprobación atrapa.
-- Ninguna entrada vacía; las dos rutas distintas entre sí.
-
-## Cambios por archivo
-
-| Archivo | Cambio |
-|---|---|
-| `data/merge.py` | **Nuevo.** `merge_datasets(destino, ruta_1, ruta_2, partition, ...) -> MergeResult`: validaciones, cálculo de `delta` y solape, escritura secuencial crear-y-anexar. |
-| `data/export.py` | Extraer a helpers compartidos `_chunk_rows`, los atributos del grupo de sensor, `_write_environmental` y `_write_events`. Subir `SCHEMA_VERSION` a 2. |
-| `ui/state.py` | `start_merge_status` / `finish_merge_status` / `merge_status`, calcado de los tres de exportación (líneas 441-449). No toca `_dataset`: fusionar no cambia el dataset activo. |
-| `ui/callbacks/helpers.py` | `default_merge_filename` y `format_merge_starting/done/error_message`, junto a los `format_export_*` (líneas 318-343). Puros y testeables; el mensaje de éxito incluye el solape de la costura. |
-| `ui/components/control_panel.py` | Sección "Fusionar bases de datos": botón + etiqueta para el archivo 1, ídem para el 2, botón "Fusionar…" y `div` de estado. El `title` debe decir que el orden 1→2 fija el orden cronológico. |
-| `ui/components/sensor_window.py` | `dcc.Store` `merge-path-1` y `merge-path-2` + `dcc.Interval` de sondeo, mismo patrón que `export-status-poll` (líneas 60-75). |
-| `ui/callbacks/sensor_window_callbacks.py` | Callbacks de elección de cada archivo (reutilizan `_open_file_dialog`, línea 78) y de fusión (reutiliza `_open_save_file_dialog`, línea 102; hilo daemon + sondeo, calcado de `_on_export_filtered`/`_run_export`, líneas 125-153 y 283-307). |
-
-Reutilizar, no reescribir: `open_reader`, `ingest_experiment`, `compute_valid_mask`,
-`compute_minmax`, `stable_file_dataset_id`, y el patrón diálogo→hilo→`dcc.Interval` que ya
-sostiene la exportación.
+`np.array([], dtype=bool).all()` es `True` por vacuidad. `get_active_mask()` devuelve una
+máscara vacía cuando el sensor no está en `_active_mask` (bloque sin señales), así que
+normalizará a `None`. Es lo correcto —no hay nada que filtrar ni que calcular— y además
+evita el `IndexError` que hoy daría el recorte `active_mask[valid_idx]` del régimen puntual
+si llegara una máscara vacía con un bloque no vacío. Va como test.
 
 ## Tests
 
-`tests/test_merge.py` nuevo, sobre el fixture `synthetic_hdf5` de `tests/conftest.py` que ya
-usa `tests/test_export.py`:
+Los cuatro tests existentes de `active_mask` en `tests/test_cache_service.py`
+(líneas 111-176) usan máscaras con al menos un `False`, así que siguen pasando sin cambios:
+una máscara que sí filtra debe seguir bypaseando. Se añaden:
 
-- El archivo 2 queda **entero** después del 1: `min(ts_2) > max(ts_1)`.
-- Las distancias internas del archivo 2 se conservan: `diff(ts_2)` idéntico antes y después.
-- El total de señales es la suma exacta: ninguna se pierde ni se duplica.
-- `compute_t0` del fusionado coincide con el inicio del archivo 1, y los minutos
-  transcurridos del tramo 2 continúan los del tramo 1 (medido vía `to_elapsed_minutes`).
-- Ambientales y eventos del archivo 2 llevan **el mismo** `delta` que sus señales.
-- Un ambiental del archivo 2 anterior a su primera señal (el caso `initial_dead_time_s`)
-  acaba solapando la cola del archivo 1, y `merge_seam_overlap_s` lo reporta.
-- `open_reader` reconoce el archivo fusionado, y **se carga con las tres particiones**:
-  `resultantes` trae todo, `filtradas` da cero señales sin reventar, `ambas` equivale a
-  `resultantes`.
-- Cada sensor tiene grupo en ambas particiones, y `filtradas/<sensor>` tiene cero filas.
-- Procedencia: `source_file_index` y `source_timestamp` permiten reconstruir los timestamps
-  originales de cada tramo.
-- Rechazos: `n_samples` distinto, `fs_hz` distinto, conjuntos de sensores distintos — cada
-  uno con su test y su mensaje.
-- Fusionar A+B y B+A da dos archivos distintos, ambos válidos.
+- `test_group_reduction_all_true_mask_uses_cache_not_bypass`: dos llamadas con máscara
+  todo-`True`; la segunda es acierto de caché y el resultado coincide byte a byte con el de
+  pasar `None`.
+- `test_group_intrinsic_all_true_mask_uses_cache_not_bypass`: ídem.
+- `test_all_true_mask_result_is_identical_to_no_mask`: para los tres regímenes, comparar
+  con `np.testing.assert_array_equal` el resultado con máscara todo-`True` contra el de
+  `None`.
+- `test_empty_mask_is_treated_as_no_filter`: máscara vacía → no revienta y equivale a `None`.
+- `test_partially_filtering_mask_still_bypasses_cache`: guardarraíl explícito de que el
+  bypass sigue vivo donde importa (complementa a los dos `..._bypasses_cache_both_ways` ya
+  existentes, dejando escrito que el cambio no los debilitó).
+- En `tests/test_cache_warmup.py`: que lo que escribe el precalentamiento en régimen de
+  grupo sea después un acierto de caché al pedirlo con una máscara todo-`True` — es el
+  agujero concreto que este cambio cierra.
 
 ## Verificación
 
@@ -182,29 +121,27 @@ usa `tests/test_export.py`:
    ```bash
    .venv/Scripts/python.exe -m mypy core data metrics cache ui viz utils
    ```
-2. Con datos reales, arrancando `python scripts/run_dev_server.py`:
-   - Fusionar `D:\data\data\main\med_5_ago_3.hdf5` (180 MB) + `med_5_ago_1.hdf5` (577 MB)
-     vigilando la memoria del proceso: debe quedarse en el orden del archivo mayor, no en la
-     suma.
-   - Cargar el fusionado y comprobar en la gráfica #1 un tramo continuo: el segundo test
-     arranca donde acaba el primero, sin hueco irreal.
-   - Mirar la costura de cerca: temperatura y humedad deben solaparse ahí (es lo esperado) y
-     el mensaje de la fusión debe haberlo anunciado con la misma duración que se ve.
-   - Navegar por clic dentro del segundo tramo y calcular una métrica.
-   - Intentar fusionar `med_5_ago_3.hdf5` con `D:\data\data\main\ruido\test-3.h5` y
-     comprobar que **se rechaza** nombrando el desajuste.
-3. Borrar `cache_data/` no hace falta: el fusionado es un archivo nuevo, así que
-   `stable_file_dataset_id` le da un `dataset_id` propio y el caché no puede confundirlo con
-   el de sus fuentes.
+2. Observar el cambio en el log, que es donde se ve directamente: las etapas
+   `cache.grupo_intrinseca` y `cache.grupo_reduccion` ya anotan `ctx["cache"]` con
+   `hit`/`miss`/`bypass`.
+   ```bash
+   ANALIZADOR_PROFILING=1 .venv/Scripts/python.exe scripts/run_dev_server.py
+   ```
+   Con un dataset real y **sin filtrar**, añadir `tasa_pulsos` a la ventana: antes del
+   cambio el log dice `bypass` siempre; después debe decir `hit` (lo dejó el
+   precalentamiento) o `miss` la primera vez y `hit` en los refrescos siguientes.
+   Comparar el tiempo de la etapa entre `bypass` y `hit` da la mejora real, medida en vez
+   de supuesta.
+3. Comprobar que el bypass sigue donde debe: filtrar una selección con el lazo y confirmar
+   que el log vuelve a decir `bypass` y que los agregados de grupo cambian en pantalla.
+4. Comprobar que los valores no cambian: con el mismo dataset sin filtrar, anotar unos
+   valores de una gráfica de grupo antes y después del cambio.
 
 ## Documentación
 
-- `README.md`: la fusión en el apartado de manejo de archivos, diciendo que el orden 1→2 fija
-  el orden cronológico, que los timestamps del archivo 2 se desplazan y que en la costura las
-  series ambientales se solapan a propósito.
-- `archivos_md/FUSION_BASES_DATOS_ENTREGA.md` nuevo, al estilo de
-  `EXPORTACION_FILTRADA_ENTREGA.md`: por qué el desfase va en bloque, por qué se calcula solo
-  con señales, por qué se escribe en streaming y por qué la salida reutiliza el formato de
-  exportación.
-- `CLAUDE.md`, en los invariantes: el desfase temporal de una fusión es **uno solo para todo
-  el archivo** — calcularlo por sensor desincroniza UHF y AE y no falla ruidosamente.
+- `docs/ARQUITECTURA.md` §5 y el invariante correspondiente de `CLAUDE.md`: precisar que el
+  bypass del régimen de grupo se activa cuando la máscara **excluye algo**, no por el mero
+  hecho de recibir una máscara. Tal como está redactado hoy, se lee como que basta con que
+  haya máscara, que es justo la lectura que dejó el caché muerto.
+- `docs/RENDIMIENTO.md`: anotar la medición del paso 2 de verificación junto al resto de
+  números de caché.

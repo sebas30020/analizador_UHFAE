@@ -58,8 +58,9 @@ ruidosamente. `docs/ARQUITECTURA.md` explica el porqué de cada una.
   porque `dataset_id` (`ruta:tamaño:mtime_ns`) ya identifica el archivo 1 a 1, así que
   dos configuraciones efectivas distintas nunca comparten clave.
 - **El caché almacena siempre el conjunto completo de señales, nunca un subconjunto
-  filtrado.** El régimen de grupo hace bypass total del caché a propósito; escribir ahí el
-  resultado filtrado envenena la vista sin filtro.
+  filtrado.** El régimen de grupo hace bypass total del caché cuando la máscara excluye al
+  menos una señal; escribir ahí el resultado filtrado envenena la vista sin filtro. Sin
+  exclusiones (máscara todo-True o None), sí usa el caché con normalidad.
 - **Régimen puntual = vectorizado sobre la matriz `(N, M)` entera**, nunca un bucle señal
   por señal.
 - **`ingest_sensor` ordena explícitamente por timestamp.** No asumas que el orden de llegada

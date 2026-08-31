@@ -177,3 +177,114 @@ def test_get_or_compute_group_intrinsic_active_mask_bypasses_cache_both_ways(cac
     )
     assert np.isclose(v_filtered[0], 4 / 60.0)
     assert cache.stats()["total_entries"] == 1
+
+
+def test_group_reduction_all_true_mask_uses_cache_not_bypass(cache, sensor_config):
+    block = _block([[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3]], [0.0, 1.0, 2.0])
+    all_true_mask = np.array([True, True, True])
+
+    # Primera llamada: calcula y persiste en caché (miss -> put)
+    t1, v1, p1 = get_or_compute_group_reduction(
+        cache, block, sensor_config, "ds_all_true_red", "vmax", "by_count", 3, reducer="median", active_mask=all_true_mask
+    )
+    assert cache.stats()["total_entries"] == 1
+
+    # Segunda llamada: acierto de caché (hit)
+    t2, v2, p2 = get_or_compute_group_reduction(
+        cache, block, sensor_config, "ds_all_true_red", "vmax", "by_count", 3, reducer="median", active_mask=all_true_mask
+    )
+    assert cache.stats()["total_entries"] == 1
+    np.testing.assert_array_equal(t1, t2)
+    np.testing.assert_array_equal(v1, v2)
+    np.testing.assert_array_equal(p1, p2)
+
+    # Coincide exactamente con la llamada sin máscara (active_mask=None)
+    t_none, v_none, p_none = get_or_compute_group_reduction(
+        cache, block, sensor_config, "ds_all_true_red", "vmax", "by_count", 3, reducer="median", active_mask=None
+    )
+    assert cache.stats()["total_entries"] == 1
+    np.testing.assert_array_equal(t1, t_none)
+    np.testing.assert_array_equal(v1, v_none)
+    np.testing.assert_array_equal(p1, p_none)
+
+
+def test_group_intrinsic_all_true_mask_uses_cache_not_bypass(cache, sensor_config):
+    block = _block([[1, 1, 1, 1]] * 5, [0.0, 1.0, 2.0, 3.0, 4.0])
+    all_true_mask = np.array([True, True, True, True, True])
+
+    t1, v1, p1 = get_or_compute_group_intrinsic(
+        cache, block, sensor_config, "ds_all_true_int", "tasa_pulsos", "by_time", 60.0, active_mask=all_true_mask
+    )
+    assert cache.stats()["total_entries"] == 1
+
+    t2, v2, p2 = get_or_compute_group_intrinsic(
+        cache, block, sensor_config, "ds_all_true_int", "tasa_pulsos", "by_time", 60.0, active_mask=all_true_mask
+    )
+    assert cache.stats()["total_entries"] == 1
+    np.testing.assert_array_equal(t1, t2)
+    np.testing.assert_array_equal(v1, v2)
+
+    t_none, v_none, p_none = get_or_compute_group_intrinsic(
+        cache, block, sensor_config, "ds_all_true_int", "tasa_pulsos", "by_time", 60.0, active_mask=None
+    )
+    assert cache.stats()["total_entries"] == 1
+    np.testing.assert_array_equal(t1, t_none)
+    np.testing.assert_array_equal(v1, v_none)
+
+
+def test_all_true_mask_result_is_identical_to_no_mask(cache, sensor_config):
+    block = _block([[1, 2, 3, 4], [2, 3, 4, 5], [3, 4, 5, 6]], [0.0, 1.0, 2.0])
+    mask = np.array([True, True, True])
+
+    # 1. Puntual
+    tp_mask, vp_mask = get_or_compute_puntual(cache, block, sensor_config, "ds_eq", "rms", active_mask=mask)
+    tp_none, vp_none = get_or_compute_puntual(cache, block, sensor_config, "ds_eq", "rms", active_mask=None)
+    np.testing.assert_array_equal(tp_mask, tp_none)
+    np.testing.assert_array_equal(vp_mask, vp_none)
+
+    # 2. Grupo reducción
+    tr_mask, vr_mask, pr_mask = get_or_compute_group_reduction(
+        cache, block, sensor_config, "ds_eq", "vmax", "by_count", 2, active_mask=mask
+    )
+    tr_none, vr_none, pr_none = get_or_compute_group_reduction(
+        cache, block, sensor_config, "ds_eq", "vmax", "by_count", 2, active_mask=None
+    )
+    np.testing.assert_array_equal(tr_mask, tr_none)
+    np.testing.assert_array_equal(vr_mask, vr_none)
+    np.testing.assert_array_equal(pr_mask, pr_none)
+
+    # 3. Grupo intrínseca
+    ti_mask, vi_mask, pi_mask = get_or_compute_group_intrinsic(
+        cache, block, sensor_config, "ds_eq", "tasa_pulsos", "by_time", 60.0, active_mask=mask
+    )
+    ti_none, vi_none, pi_none = get_or_compute_group_intrinsic(
+        cache, block, sensor_config, "ds_eq", "tasa_pulsos", "by_time", 60.0, active_mask=None
+    )
+    np.testing.assert_array_equal(ti_mask, ti_none)
+    np.testing.assert_array_equal(vi_mask, vi_none)
+    np.testing.assert_array_equal(pi_mask, pi_none)
+
+
+def test_empty_mask_is_treated_as_no_filter(cache, sensor_config):
+    block = _block([[1, 1, 1, 1]], [0.0])
+    empty_mask = np.array([], dtype=bool)
+
+    # No debe levantar IndexError y debe normalizar a None
+    t, v = get_or_compute_puntual(cache, block, sensor_config, "ds_empty", "rms", active_mask=empty_mask)
+    assert v.shape[0] == 1
+
+    t_g, v_g, _ = get_or_compute_group_reduction(
+        cache, block, sensor_config, "ds_empty", "vmax", "by_count", 1, active_mask=empty_mask
+    )
+    assert v_g.shape[0] == 1
+
+
+def test_partially_filtering_mask_still_bypasses_cache(cache, sensor_config):
+    block = _block([[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3]], [0.0, 1.0, 2.0])
+    partial_mask = np.array([True, False, True])
+
+    # Llamada con filtro parcial: debe bypasear y no escribir en caché
+    t, v, _ = get_or_compute_group_reduction(
+        cache, block, sensor_config, "ds_partial", "vmax", "by_count", 3, reducer="median", active_mask=partial_mask
+    )
+    assert cache.stats()["total_entries"] == 0

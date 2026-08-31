@@ -197,3 +197,24 @@ def test_warm_cache_without_cancel_event_computes_everything(tmp_path, sensor_co
 
     assert len(done) == len(specs)
     cache.close()
+
+
+def test_warm_cache_group_metrics_hit_cache_when_queried_with_all_true_mask(tmp_path, sensor_config, block):
+    from cache.service import get_or_compute_group_intrinsic
+
+    cache = SqliteHdf5CacheBackend(tmp_path / "cache")
+    specs = [WarmupSpec(sensor="UHF", metric_id="tasa_pulsos", regimen="grupo_intrinseca", grouping_mode="by_time", grouping_value=60.0)]
+    warm_cache(cache, {"UHF": block}, {"UHF": sensor_config}, "ds1", specs)
+
+    initial_entries = cache.stats()["total_entries"]
+    assert initial_entries == 1
+
+    all_true_mask = np.ones(block.data.shape[0], dtype=bool)
+
+    # Con máscara todo-True, debe consultar el caché poblado por el warmup (no hacer bypass ni reescribir)
+    t, v, p = get_or_compute_group_intrinsic(
+        cache, block, sensor_config, "ds1", "tasa_pulsos", "by_time", 60.0, active_mask=all_true_mask
+    )
+    assert cache.stats()["total_entries"] == initial_entries
+    assert v.shape[0] > 0
+    cache.close()

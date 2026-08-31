@@ -23,6 +23,16 @@ from metrics.registry import get_metric
 from utils.profiling import stage
 
 
+def _sin_exclusiones(active_mask: np.ndarray | None) -> np.ndarray | None:
+    """Una máscara todo-True no excluye nada, así que es equivalente a no tener filtro.
+    Normalizarla a None aquí es lo que permite que el régimen de grupo entre por el
+    caché cuando el usuario no ha filtrado: el bypass sigue siendo total en cuanto haya
+    una sola señal excluida."""
+    if active_mask is None or bool(active_mask.all()):
+        return None
+    return active_mask
+
+
 def get_or_compute_puntual(
     cache: CacheBackend,
     block: SignalBlock,
@@ -41,6 +51,7 @@ def get_or_compute_puntual(
     si se pasa una máscara, se aplica como filtro posterior puro sobre el resultado ya
     obtenido, nunca se reescribe en caché ni dispara un recálculo.
     """
+    active_mask = _sin_exclusiones(active_mask)
     definition = get_metric(metric_id)
     key, canonical_json = build_cache_key_with_json(
         dataset_id=dataset_id,
@@ -86,9 +97,10 @@ def get_or_compute_group_reduction(
 
     ``active_mask`` (Fase 6, PROMPT §7): a diferencia del régimen puntual, los
     agregados de grupo SÍ cambian si se excluye una señal (§7.2, "reconciliación") --
-    con máscara activa, esta función bypasea el caché por completo (nunca lee ni
-    escribe) y recalcula directamente vía ``metrics.engine``.
+    con máscara activa que excluye al menos una señal, esta función bypasea el caché por
+    completo (nunca lee ni escribe) y recalcula directamente vía ``metrics.engine``.
     """
+    active_mask = _sin_exclusiones(active_mask)
     definition = get_metric(metric_id)
     with stage("cache.grupo_reduccion", sensor=sensor_config.name, metrica=metric_id) as ctx:
         if active_mask is not None:
@@ -140,6 +152,7 @@ def get_or_compute_group_intrinsic(
     ``active_mask`` (Fase 6, PROMPT §7): ver :func:`get_or_compute_group_reduction` --
     misma estrategia de bypass total de caché cuando hay filtro activo.
     """
+    active_mask = _sin_exclusiones(active_mask)
     definition = get_metric(metric_id)
     with stage("cache.grupo_intrinseca", sensor=sensor_config.name, metrica=metric_id) as ctx:
         if active_mask is not None:
