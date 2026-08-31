@@ -49,6 +49,15 @@ def build_timeseries_figure(
     ``show_events``: visibilidad de las líneas de evento (control "Mostrar eventos",
     ``archivos_md/prompt-mejora-graficas.md`` §2). ``uirevision``: estable frente a
     redibujados que no deben perder el zoom del usuario.
+
+    **Hover y Navegación WebGL**: en Plotly.js (v3.8.2), ``Scattergl`` solo construye el
+    kd-tree espacial si ``_length >= TOO_MANY_POINTS`` (``TOO_MANY_POINTS = 1e5``). Con
+    los datasets reales (~3.7×10⁴ puntos en UHF y ~6.2×10⁴ en AE), cada evento de hover
+    dispara un barrido lineal sobre todo el array (~20/s) que congela el navegador. Para
+    evitarlo, la envolvente se marca con ``hoverinfo="skip"`` (excluyéndola del cálculo
+    de hover sin afectar la selección por lazo/caja, que no evalúa ``hoverinfo``). La
+    navegación por clic se preserva mediante ``clickanywhere=True`` en el layout, que
+    propaga ``xvals`` en el payload de ``clickData``.
     """
     with stage("render.grafica1", sensor=sensor_config.name) as ctx:
         fig = go.Figure()
@@ -64,6 +73,7 @@ def build_timeseries_figure(
                     x=xs, y=ys, mode="lines+markers",
                     line=dict(color=SIGNAL_COLOR, width=1), marker=dict(size=3, color=SIGNAL_COLOR),
                     name=f"Señal {sensor_config.name} (envolvente)", yaxis="y1",
+                    hoverinfo="skip",
                 )
             )
 
@@ -73,12 +83,14 @@ def build_timeseries_figure(
                 go.Scatter(
                     x=t_env, y=environmental.temperature, mode="lines",
                     name="Temperatura (°C)", line=dict(color=TEMPERATURE_COLOR), yaxis="y2",
+                    hovertemplate="t = %{x:.2f} min<br>Temp = %{y:.1f} °C<extra></extra>",
                 )
             )
             fig.add_trace(
                 go.Scatter(
                     x=t_env, y=environmental.humidity, mode="lines",
                     name="Humedad (%)", line=dict(color=HUMIDITY_COLOR, dash="dot"), yaxis="y2",
+                    hovertemplate="t = %{x:.2f} min<br>Humedad = %{y:.1f} %<extra></extra>",
                 )
             )
 
@@ -91,5 +103,7 @@ def build_timeseries_figure(
             margin=dict(l=60, r=60, t=30, b=40),
             height=280,
             uirevision=uirevision,
+            hovermode="closest",
+            clickanywhere=True,
         )
         return fig

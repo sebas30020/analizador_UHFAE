@@ -118,3 +118,55 @@ def test_panel_central_order_signal_then_envelope_then_metrics():
     panel_central = next(child for child in layout.children if getattr(child, "className", None) == "panel-central")
     ids = [getattr(c, "id", None) or getattr(c, "className", None) for c in panel_central.children]
     assert ids.index("graph-signal") < ids.index("graph-timeseries") < ids.index("metrics-graphs-container")
+
+
+def test_envelope_trace_is_excluded_from_hover():
+    n = 100
+    block = _block(n)
+    trace = _envelope_figure(block, np.ones(n, dtype=bool))
+    assert trace.hoverinfo == "skip"
+
+
+def test_layout_enables_clickanywhere_and_closest_hover():
+    n = 10
+    block = _block(n)
+    env, events = _empty_environment()
+    t0 = float(block.timestamps[0])
+    fig = build_timeseries_figure(UHF_CONFIG, block, env, events, t0, np.ones(n, dtype=bool))
+    assert fig.layout.clickanywhere is True
+    assert fig.layout.hovermode == "closest"
+
+
+def test_environmental_traces_have_informative_hovertemplate():
+    n = 10
+    block = _block(n)
+    t0 = float(block.timestamps[0])
+    env = EnvironmentalSeries(
+        timestamps=np.array([1000.0, 1060.0]),
+        temperature=np.array([22.5, 23.0]),
+        humidity=np.array([45.0, 46.5]),
+    )
+    events = EventSeries(timestamps=np.array([]), event_type=np.array([], dtype=object))
+    fig = build_timeseries_figure(UHF_CONFIG, block, env, events, t0, np.ones(n, dtype=bool))
+    traces = {tr.name: tr for tr in fig.data}
+    assert "Temperatura (°C)" in traces
+    assert "Humedad (%)" in traces
+    assert "Temp = %{y:.1f} °C" in traces["Temperatura (°C)"].hovertemplate
+    assert "<extra></extra>" in traces["Temperatura (°C)"].hovertemplate
+    assert "Humedad = %{y:.1f} %" in traces["Humedad (%)"].hovertemplate
+    assert "<extra></extra>" in traces["Humedad (%)"].hovertemplate
+
+
+def test_timeseries_figure_with_no_active_signals_omits_envelope_trace():
+    n = 10
+    block = _block(n)
+    t0 = float(block.timestamps[0])
+    env = EnvironmentalSeries(
+        timestamps=np.array([1000.0]),
+        temperature=np.array([22.5]),
+        humidity=np.array([45.0]),
+    )
+    events = EventSeries(timestamps=np.array([]), event_type=np.array([], dtype=object))
+    fig = build_timeseries_figure(UHF_CONFIG, block, env, events, t0, np.zeros(n, dtype=bool))
+    assert not any("envolvente" in (tr.name or "") for tr in fig.data)
+    assert len(fig.data) == 2

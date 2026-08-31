@@ -343,24 +343,59 @@ def register_callbacks(app: Dash) -> None:
 
         click_target = None
         if triggered_kind in ("graph-timeseries", "graph-metric"):
-            click_data = ctx.triggered[0]["value"] if is_metric_click else click_timeseries
-            points = (click_data or {}).get("points") or []
-            if not points:
+            triggered_items = getattr(ctx, "triggered", None) or []
+            click_data = (
+                triggered_items[0].get("value")
+                if (is_metric_click and triggered_items and isinstance(triggered_items[0], dict))
+                else click_timeseries
+            )
+            click_dict = click_data if isinstance(click_data, dict) else {}
+
+            # Con clickanywhere=True (gráfica #1), dcc.Graph entrega xvals/yvals con points=[]
+            # o con puntos de curvas ambientales si se hace clic sobre ellos. Se prioriza
+            # xvals sobre points para evitar que clics sobre curvas ambientales naveguen al
+            # timestamp discreto ambiental en lugar de la coordenada temporal del cursor.
+            # En gráficas #3 (sin clickanywhere), entrega points=[{"x": ...}].
+            x_val = None
+            xvals = click_dict.get("xvals")
+            if isinstance(xvals, (list, tuple)) and len(xvals) > 0 and xvals[0] is not None:
+                x_val = xvals[0]
+            else:
+                points = click_dict.get("points")
+                if isinstance(points, (list, tuple)) and len(points) > 0 and isinstance(points[0], dict):
+                    x_val = points[0].get("x")
+
+            if x_val is None:
                 raise PreventUpdate
+
+            try:
+                x_float = float(x_val)
+                if np.isnan(x_float) or np.isinf(x_float):
+                    raise PreventUpdate
+            except (ValueError, TypeError):
+                raise PreventUpdate
+
             # Las gráficas #1/#3 dibujan minutos transcurridos (ui/components/time_axis.py),
             # no timestamp UNIX -- hay que reconvertir el clic antes de buscar el índice.
-            clicked_unix = elapsed_minutes_to_unix_seconds(float(points[0]["x"]), dataset.t0)
+            clicked_unix = elapsed_minutes_to_unix_seconds(x_float, dataset.t0)
             click_target = state.nearest_index_for_timestamp(sensor, clicked_unix)
         elif triggered_kind == "graph-map":
             # Un punto de #4/#5 YA es una señal: se resuelve por posición dentro de la
             # traza contra el MapDataset con el que se dibujó ese mapa (registro de
             # proceso, ui/map_registry.py), sin buscar vecino más cercano por timestamp
             # y sin depender de customdata -- ver ui/components/graph_map_common.py.
-            map_dataset = get_map_registry().get(triggered["index"])
+            map_key = triggered.get("index") if isinstance(triggered, dict) else None
+            map_dataset = get_map_registry().get(map_key) if map_key is not None else None
             if map_dataset is None:
                 raise PreventUpdate
+            triggered_items = getattr(ctx, "triggered", None) or []
+            map_click_data = (
+                triggered_items[0].get("value")
+                if (triggered_items and isinstance(triggered_items[0], dict))
+                else None
+            )
             click_target = resolve_map_click_signal_index(
-                ctx.triggered[0]["value"], map_dataset.signal_indices
+                map_click_data, map_dataset.signal_indices
             )
             if click_target is None:
                 raise PreventUpdate
@@ -374,10 +409,12 @@ def register_callbacks(app: Dash) -> None:
             active_indices = np.where(state.get_active_mask(sensor))[0]
 
         new_index = resolve_nav_index(triggered_kind, nav_value, current, n_total, click_target, active_indices)
-        if new_index == current and triggered_kind == AUTOPLAY_TRIGGER_ID:
-            # Una sola señal activa (o ninguna): el bucle no tiene a dónde avanzar. Sin
-            # esto, cada tick reescribiría el mismo valor y dispararía un repintado
-            # completo de la gráfica #2 para no mover nada.
+        if new_index == current and triggered_kind in (
+            AUTOPLAY_TRIGGER_ID, "graph-timeseries", "graph-metric", "graph-map"
+        ):
+            # Una sola señal activa (o ninguna), o clic en la señal ya activa / doble
+            # clic para restablecer zoom: no hay a dónde mover el cursor. Se levanta
+            # PreventUpdate para evitar repintados innecesarios de graph-signal.
             raise PreventUpdate
 
         state.set_active_index(sensor, new_index)

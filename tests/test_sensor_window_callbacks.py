@@ -769,3 +769,276 @@ def test_autoplay_tick_with_a_single_active_signal_prevents_update(app_and_state
     state.set_active_index("UHF", 3)
     with pytest.raises(PreventUpdate):
         _call_navigate(dash_app, state, monkeypatch, "autoplay-interval")
+
+
+# --- Navegación por clic en gráficas (R2: clickanywhere, prioridad xvals, guardarraíl)
+
+
+def test_click_on_timeseries_with_clickanywhere_payload_navigates(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+    t0 = state.dataset.t0
+    t_target_2 = (float(state.dataset.blocks["UHF"].timestamps[2]) - t0) / 60.0
+
+    click_payload = {"points": [], "xvals": [t_target_2], "yvals": [0.0]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": click_payload}]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    result = fn(None, None, None, click_payload, [], [], state.dataset_version, 1, "UHF")
+    assert result == 2
+
+
+def test_click_on_timeseries_prefers_xvals_over_environmental_point(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+    t0 = state.dataset.t0
+    t_target_2 = (float(state.dataset.blocks["UHF"].timestamps[2]) - t0) / 60.0
+    t_env_0 = (float(state.dataset.blocks["UHF"].timestamps[0]) - t0) / 60.0
+
+    # payload con xvals apuntando a la señal 2 y points (ambiental) apuntando a la señal 0
+    click_payload = {
+        "points": [{"curveNumber": 1, "pointNumber": 0, "x": t_env_0, "y": 20.0}],
+        "xvals": [t_target_2],
+        "yvals": [0.0],
+    }
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": click_payload}]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    result = fn(None, None, None, click_payload, [], [], state.dataset_version, 1, "UHF")
+    assert result == 2
+
+
+def test_click_on_metric_with_standard_points_payload_navigates(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+    t0 = state.dataset.t0
+    t_target_2 = (float(state.dataset.blocks["UHF"].timestamps[2]) - t0) / 60.0
+
+    click_payload = {"points": [{"curveNumber": 0, "pointNumber": 0, "x": t_target_2, "y": 0.5}]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(
+            triggered_id={"type": "graph-metric", "index": "puntual:rms"},
+            triggered=[{"value": click_payload}],
+        ),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    result = fn(None, None, None, None, [click_payload], [], state.dataset_version, 1, "UHF")
+    assert result == 2
+
+
+def test_click_with_empty_payload_prevents_update(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+
+    # Caso 1: payload vacío {"points": [], "xvals": []}
+    click_payload_empty = {"points": [], "xvals": []}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": click_payload_empty}]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, click_payload_empty, [], [], state.dataset_version, 1, "UHF")
+
+    # Caso 2: payload None
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": None}]),
+    )
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, None, [], [], state.dataset_version, 1, "UHF")
+
+
+def test_click_on_same_signal_prevents_update(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+    t0 = state.dataset.t0
+    t_target_0 = (float(state.dataset.blocks["UHF"].timestamps[0]) - t0) / 60.0
+
+    click_payload = {"points": [], "xvals": [t_target_0], "yvals": [0.0]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": click_payload}]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, click_payload, [], [], state.dataset_version, 1, "UHF")
+
+
+def test_click_on_same_signal_in_metric_prevents_update(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+    t0 = state.dataset.t0
+    t_target_0 = (float(state.dataset.blocks["UHF"].timestamps[0]) - t0) / 60.0
+
+    click_payload = {"points": [{"curveNumber": 0, "pointNumber": 0, "x": t_target_0, "y": 0.5}]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(
+            triggered_id={"type": "graph-metric", "index": "puntual:rms"},
+            triggered=[{"value": click_payload}],
+        ),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, None, [click_payload], [], state.dataset_version, 1, "UHF")
+
+
+def test_click_on_same_signal_in_map_prevents_update(app_and_state, monkeypatch):
+    dash_app, state = app_and_state
+    _enable_2d_map(dash_app, state, monkeypatch)
+    state.set_active_index("UHF", 0)
+
+    # Posición 0 en la traza corresponde a la señal global 0. Como el índice activo ya es 0,
+    # debe levantar PreventUpdate.
+    click_data = {"points": [{"curveNumber": 0, "pointNumber": 0, "x": 0.1, "y": 0.2}]}
+    _map_event_ctx(monkeypatch, "2d", click_data)
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, None, [], [click_data], state.dataset_version, 1, "UHF")
+
+
+def test_click_out_of_bounds_temporal_clamping(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 2)
+
+    # Clic a la izquierda del inicio (t < 0): debe navegar a la primera señal (0)
+    click_payload_left = {"points": [], "xvals": [-100.0], "yvals": [0.0]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": click_payload_left}]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    result_left = fn(None, None, None, click_payload_left, [], [], state.dataset_version, 1, "UHF")
+    assert result_left == 0
+
+    # Clic a la derecha del final (t >> t_max): debe navegar a la última señal (3)
+    click_payload_right = {"points": [], "xvals": [999999.0], "yvals": [0.0]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": click_payload_right}]),
+    )
+    result_right = fn(None, None, None, click_payload_right, [], [], state.dataset_version, 1, "UHF")
+    assert result_right == 3
+
+
+def test_click_with_none_in_xvals_falls_back_to_points(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+    t0 = state.dataset.t0
+    t_target_2 = (float(state.dataset.blocks["UHF"].timestamps[2]) - t0) / 60.0
+
+    # xvals contiene [None], points contiene la coordenada x válida
+    click_payload = {"points": [{"x": t_target_2}], "xvals": [None]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": click_payload}]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    result = fn(None, None, None, click_payload, [], [], state.dataset_version, 1, "UHF")
+    assert result == 2
+
+
+def test_click_with_points_missing_x_prevents_update(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+
+    # points sin clave 'x' ni 'xvals'
+    click_payload = {"points": [{"curveNumber": 0, "pointNumber": 0}]}
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": click_payload}]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, click_payload, [], [], state.dataset_version, 1, "UHF")
+
+
+@pytest.mark.parametrize("bad_payload", [
+    "not_a_dict",
+    12345,
+    {"xvals": 123},
+    {"xvals": "abc"},
+    {"xvals": ["not_a_number"]},
+    {"xvals": [float("nan")]},
+    {"xvals": [float("inf")]},
+    {"points": 123},
+    {"points": ["not_a_dict"]},
+    {"points": [{"x": "not_a_number"}]},
+    {"points": [{"x": float("nan")}]},
+    {"points": [{"x": float("inf")}]},
+    {"points": [{"y": 1.0}]},
+])
+def test_click_with_malformed_payloads_prevents_update(app_and_state, monkeypatch, bad_payload):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id="graph-timeseries", triggered=[{"value": bad_payload}]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, bad_payload, [], [], state.dataset_version, 1, "UHF")
+
+
+def test_click_metric_with_empty_triggered_list_prevents_update(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    state.set_active_index("UHF", 0)
+
+    # triggered_id es dict de métrica pero ctx.triggered es una lista vacía
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id={"type": "graph-metric", "index": "puntual:rms"}, triggered=[]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, None, [], [], state.dataset_version, 1, "UHF")
+
+
+def test_click_map_with_empty_triggered_list_prevents_update(app_and_state, monkeypatch):
+    from types import SimpleNamespace
+
+    dash_app, state = app_and_state
+    _enable_2d_map(dash_app, state, monkeypatch)
+    state.set_active_index("UHF", 0)
+
+    # triggered_id es dict de mapa pero ctx.triggered es una lista vacía
+    monkeypatch.setattr(
+        swc, "ctx",
+        SimpleNamespace(triggered_id={"type": "graph-map", "index": "2d"}, triggered=[]),
+    )
+    fn = _wrapped(dash_app, "nav-index.value")
+    with pytest.raises(PreventUpdate):
+        fn(None, None, None, None, [], [], state.dataset_version, 1, "UHF")
+
+
+
+

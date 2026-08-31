@@ -76,12 +76,32 @@ margen — es el indicador a vigilar si el dataset crece o si se apilan más gr�
 
 ### 1.2 Lo que estos números no dicen
 
-Todo se mide **del lado del servidor**: el tiempo termina cuando la figura está
-serializada y lista para viajar. No incluye la latencia de red local ni el tiempo que
-tarda el navegador en pintar la traza WebGL. Para la gráfica #1, con ~37 000 (UHF) y
-~62 000 (AE) puntos y 1,9 / 2,5 MB de JSON por refresco, ese tramo no es despreciable y
-**no está medido**: hace falta un cronometraje en navegador real para cerrar el número de
-punta a punta.
+Todo en la tabla de §1 se mide **del lado del servidor**: el tiempo termina cuando la figura
+está serializada y lista para viajar. No incluye la latencia de red local ni lo que tarda el
+navegador en pintar la traza WebGL. Para la gráfica #1, con 37 452 puntos (UHF) y 61 722 (AE)
+y 1,9 / 2,5 MB de JSON por refresco, ese tramo no es despreciable y **sigue sin medirse**:
+hace falta un cronometraje en navegador real para cerrar el número de punta a punta.
+
+Lo que sí quedó establecido, leyendo el `plotly.min.js` que sirve la app (v3.8.2), es el
+mecanismo por el que el *hover* sobre esa gráfica llegaba a congelar la pestaña:
+
+- `scattergl/calc` solo construye el kd-tree espacial si `_length >= TOO_MANY_POINTS`, y
+  `TOO_MANY_POINTS = 1e5`. Con 37 452 / 61 722 puntos estamos por debajo del umbral, así que
+  en vez de un árbol guarda `stash.ids` = todos los índices.
+- `scattergl/hover.js::hoverPoints` hace entonces `v = a.ids` y **recorre el array completo**
+  con `xa.c2p()`, `ya.c2p()` y `Math.sqrt` por punto, en cada evento de hover. El coste crece
+  lineal con el número de señales y satura el hilo principal.
+- El arreglo es `hoverinfo="skip"` en la envolvente: el bucle de trazas de `Fx.hover` filtra
+  por `ae.hoverinfo !== "skip"`, así que la traza queda fuera del cálculo y el barrido
+  desaparece. La selección por lazo no se ve afectada — `determineSearchTraces` filtra solo
+  por `visible` y `_module.selectPoints`, no mira `hoverinfo`.
+- La navegación por clic la sostiene `clickanywhere=True`: `Fx.hover` puebla `_hoverXVals`
+  **antes** del bucle de trazas, y `dcc.Graph::filterEventData` propaga `xvals` al `clickData`
+  solo cuando ese flag está activo.
+
+Queda pendiente cuantificarlo: instrumentar `Plotly.Fx.hover` con `performance.now()` y contar
+*long tasks* con `PerformanceObserver`, antes y después, sobre `/sensor/AE` (el caso peor).
+Hasta entonces la mejora está justificada por el mecanismo, no por un número medido.
 
 ## 2. La optimización que destapó la medición
 
