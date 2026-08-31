@@ -111,11 +111,16 @@ de navegador usado se oculta entre llamadas, y con la pestaña en segundo plano 
 `PerformanceObserver({entryTypes:['longtask']})` dan nada utilizable. Hace falta repetirlo en
 una ventana de Chrome real en primer plano.
 
-Consecuencia práctica: `hoverinfo="skip"` está en el código y es inofensivo, pero **su
-justificación de rendimiento no está demostrada**. Lo que sí aporta el mismo cambio, y es
-comprobable a mano, es `clickanywhere=True` (navegar clicando en cualquier parte en vez de
-tener que acertarle a un segmento de 1 px) y el guardarraíl de `PreventUpdate` que evita
-repintar la gráfica #2 dos veces en un doble clic.
+Consecuencia práctica: `hoverinfo="skip"` **se revirtió**. Costaba el tooltip de la
+envolvente y la medición dice que no compraba nada; mantenerlo habría sido pagar un precio
+real por un beneficio no demostrado. Del mismo trabajo sí sobreviven dos cosas comprobables
+a mano: `clickanywhere=True` (navegar clicando en cualquier parte en vez de tener que
+acertarle a un segmento de 1 px) y el guardarraíl de `PreventUpdate` que evita repintar la
+gráfica #2 dos veces en un doble clic.
+
+Queda pendiente, entonces, la pregunta original: **de dónde salen los ~30-55 ms por evento**.
+Hasta responderla no hay arreglo de rendimiento para el hover de esta gráfica, solo una
+hipótesis descartada — que ya es más de lo que había.
 
 ## 2. La optimización que destapó la medición
 

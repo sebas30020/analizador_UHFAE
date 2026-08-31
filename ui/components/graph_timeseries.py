@@ -50,20 +50,20 @@ def build_timeseries_figure(
     ``archivos_md/prompt-mejora-graficas.md`` §2). ``uirevision``: estable frente a
     redibujados que no deben perder el zoom del usuario.
 
-    **Hover y navegación**: la envolvente lleva ``hoverinfo="skip"``, que la excluye del
-    bucle de trazas de ``Fx.hover`` (filtra por ``hoverinfo !== "skip"``). El motivo
-    original era de rendimiento: con 61 722 puntos en AE se está por debajo de
-    ``TOO_MANY_POINTS = 1e5``, así que plotly.js no construye el kd-tree y ``hoverPoints``
-    recorre el array entero en cada evento. **Ese razonamiento no sobrevivió a la
-    medición**: quitar la traza del hover no cambia el coste por evento (46,8 ms contra
-    42,9 ms, indistinguibles -- ver ``docs/RENDIMIENTO.md`` §1.2). Se mantiene porque es
-    inofensivo, no porque esté demostrado que ayude.
+    **Navegación por clic**: ``clickanywhere=True`` hace que ``Fx.click`` emita
+    ``plotly_click`` aunque el cursor no esté sobre ningún punto, con ``xvals`` en el
+    payload (``dcc.Graph::filterEventData`` solo lo propaga si ese flag está activo). Así
+    se navega clicando en cualquier parte del área de dibujo en vez de tener que acertarle
+    a un segmento de 1 px, y ``_on_navigate`` prioriza ``xvals`` sobre ``points`` porque un
+    clic encima de las curvas ambientales manda las dos cosas y la ``x`` del punto ambiental
+    está discretizada a su propia cadencia de muestreo, mucho más gruesa.
 
-    Lo que sí depende de esto es el clic: con la envolvente fuera del hover, ``Fx.click``
-    no tendría puntos que reportar, así que ``clickanywhere=True`` es lo que hace que
-    ``dcc.Graph`` propague ``xvals`` en el ``clickData`` y la navegación siga funcionando.
-    La selección por lazo/caja no se ve afectada en ningún caso: ``determineSearchTraces``
-    no evalúa ``hoverinfo``.
+    Aquí hubo un ``hoverinfo="skip"`` en la envolvente, con la idea de que ahorraba el
+    barrido lineal que ``scattergl/hover.js::hoverPoints`` hace cuando la traza queda por
+    debajo de ``TOO_MANY_POINTS = 1e5`` (AE tiene 61 722 puntos). **Se midió y no ahorraba
+    nada** -- 46,8 ms contra 42,9 ms por evento, indistinguibles -- así que se revirtió
+    para no perder el tooltip a cambio de nada. El detalle está en ``docs/RENDIMIENTO.md``
+    §1.2, incluido lo que queda por medir.
     """
     with stage("render.grafica1", sensor=sensor_config.name) as ctx:
         fig = go.Figure()
@@ -79,7 +79,6 @@ def build_timeseries_figure(
                     x=xs, y=ys, mode="lines+markers",
                     line=dict(color=SIGNAL_COLOR, width=1), marker=dict(size=3, color=SIGNAL_COLOR),
                     name=f"Señal {sensor_config.name} (envolvente)", yaxis="y1",
-                    hoverinfo="skip",
                 )
             )
 

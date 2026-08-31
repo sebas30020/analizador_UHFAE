@@ -120,11 +120,16 @@ def test_panel_central_order_signal_then_envelope_then_metrics():
     assert ids.index("graph-signal") < ids.index("graph-timeseries") < ids.index("metrics-graphs-container")
 
 
-def test_envelope_trace_is_excluded_from_hover():
+def test_envelope_trace_keeps_its_hover():
+    # Llevó hoverinfo="skip" un tiempo, para ahorrar el barrido lineal de
+    # scattergl/hoverPoints cuando la traza queda por debajo de TOO_MANY_POINTS.
+    # Medido, no ahorraba nada (46,8 ms contra 42,9 ms por evento: indistinguibles,
+    # ver docs/RENDIMIENTO.md §1.2), así que se revirtió antes que perder el tooltip
+    # a cambio de nada. Esta prueba existe para que no vuelva a colarse sin medición.
     n = 100
     block = _block(n)
     trace = _envelope_figure(block, np.ones(n, dtype=bool))
-    assert trace.hoverinfo == "skip"
+    assert trace.hoverinfo != "skip"
 
 
 def test_layout_enables_clickanywhere_and_closest_hover():
