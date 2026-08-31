@@ -7,3 +7,13 @@ __pycache__/
 *.hdf5
 *.sqlite
 cache_data/
+
+# Estado local de herramientas de agentes (bitácoras, memoria, hooks y skills que
+# genera AVO). Es estado de la máquina, no del proyecto, y arrastra rutas locales
+# -- el repo es público. Ojo: .claude/launch.json SÍ se versiona, así que aquí se
+# ignoran solo los subdirectorios concretos, nunca .claude/ entero.
+.agents/
+.avo/
+.gemini/
+.claude/hooks/
+.claude/skills/
