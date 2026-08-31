@@ -57,9 +57,8 @@ De arriba abajo:
    señales, con temperatura y humedad en el eje derecho y una línea vertical roja por
    evento. Aquí no hay diezmado: se dibuja un segmento por señal, sean 12 000 o 20 000.
    Al hacer clic en cualquier punto de la gráfica se navega a la señal más cercana en el
-   tiempo. La envolvente no muestra tooltip: queda fuera del cálculo de hover de Plotly, que
-   con decenas de miles de puntos llegaba a bloquear la pestaña. Temperatura y humedad sí lo
-   muestran.
+   tiempo, sin tener que acertarle a un segmento. La envolvente no muestra tooltip;
+   temperatura y humedad sí.
 3. **Gráficas de métricas** (tipo #3): una por cada métrica que se agregue desde el
    selector del panel lateral, apiladas con scroll de página.
 4. **Mapas de separación** (tipos #4 y #5), siempre al final: ver abajo.

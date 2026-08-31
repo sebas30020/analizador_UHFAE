@@ -50,14 +50,20 @@ def build_timeseries_figure(
     ``archivos_md/prompt-mejora-graficas.md`` §2). ``uirevision``: estable frente a
     redibujados que no deben perder el zoom del usuario.
 
-    **Hover y Navegación WebGL**: en Plotly.js (v3.8.2), ``Scattergl`` solo construye el
-    kd-tree espacial si ``_length >= TOO_MANY_POINTS`` (``TOO_MANY_POINTS = 1e5``). Con
-    los datasets reales (~3.7×10⁴ puntos en UHF y ~6.2×10⁴ en AE), cada evento de hover
-    dispara un barrido lineal sobre todo el array (~20/s) que congela el navegador. Para
-    evitarlo, la envolvente se marca con ``hoverinfo="skip"`` (excluyéndola del cálculo
-    de hover sin afectar la selección por lazo/caja, que no evalúa ``hoverinfo``). La
-    navegación por clic se preserva mediante ``clickanywhere=True`` en el layout, que
-    propaga ``xvals`` en el payload de ``clickData``.
+    **Hover y navegación**: la envolvente lleva ``hoverinfo="skip"``, que la excluye del
+    bucle de trazas de ``Fx.hover`` (filtra por ``hoverinfo !== "skip"``). El motivo
+    original era de rendimiento: con 61 722 puntos en AE se está por debajo de
+    ``TOO_MANY_POINTS = 1e5``, así que plotly.js no construye el kd-tree y ``hoverPoints``
+    recorre el array entero en cada evento. **Ese razonamiento no sobrevivió a la
+    medición**: quitar la traza del hover no cambia el coste por evento (46,8 ms contra
+    42,9 ms, indistinguibles -- ver ``docs/RENDIMIENTO.md`` §1.2). Se mantiene porque es
+    inofensivo, no porque esté demostrado que ayude.
+
+    Lo que sí depende de esto es el clic: con la envolvente fuera del hover, ``Fx.click``
+    no tendría puntos que reportar, así que ``clickanywhere=True`` es lo que hace que
+    ``dcc.Graph`` propague ``xvals`` en el ``clickData`` y la navegación siga funcionando.
+    La selección por lazo/caja no se ve afectada en ningún caso: ``determineSearchTraces``
+    no evalúa ``hoverinfo``.
     """
     with stage("render.grafica1", sensor=sensor_config.name) as ctx:
         fig = go.Figure()
