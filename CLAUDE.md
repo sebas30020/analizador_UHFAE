@@ -29,13 +29,17 @@ El intérprete es el del venv del repo, **no** el `python` del PATH:
 
 ```
 pytest tests/ -q                                   # suite completa
-mypy core data metrics cache ui viz utils          # sin config: la lista de paquetes es explícita
+mypy core data metrics cache ui viz utils          # la lista de paquetes es explícita
 python -m benchmarks.run_benchmarks --dataset RUTA.hdf5 --repeats 5
 ANALIZADOR_PROFILING=1 python scripts/run_dev_server.py    # tiempos por etapa en el log
 python scripts/run_dev_server.py                   # http://127.0.0.1:8050/sensor/UHF
 ```
 
-No hay `pyproject.toml` ni `mypy.ini`: mypy corre con defaults sobre esa lista de paquetes.
+No hay `pyproject.toml`. El único `mypy.ini` del repo tiene una sola línea,
+`ignore_missing_imports = True`, y existe para callar los 28 `import-untyped` de plotly,
+dash y demás dependencias sin stubs: sin él la salida es ruido puro y no se ve un error
+real. No debilita nada del código propio — esos módulos ya se resolvían a `Any`. Todo lo
+demás corre con defaults sobre esa lista de paquetes.
 Las dependencias están pinneadas exactas en `requirements.txt` — no las subas de versión de
 paso mientras haces otra cosa.
 
