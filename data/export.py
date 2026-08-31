@@ -26,7 +26,7 @@ import numpy as np
 from core.models import EnvironmentalSeries, EventSeries, SensorConfig, SensorName, SignalBlock
 from utils.profiling import stage
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _GZIP_LEVEL = 4
 
 # Firma de reconocimiento por contenido (mismo criterio que los otros dos formatos de
@@ -42,11 +42,27 @@ FILTRADAS_GROUP = "filtradas"
 ExportPartition = Literal["resultantes", "filtradas", "ambas"]
 
 
-def _chunk_rows(n_signals: int, n_samples: int, target_block_bytes: int = 8 * 1024 * 1024) -> int:
+def chunk_rows(n_signals: int, n_samples: int, target_block_bytes: int = 8 * 1024 * 1024) -> int:
     if n_signals == 0 or n_samples == 0:
         return 1
     bytes_per_row = n_samples * 4
     return max(1, min(n_signals, target_block_bytes // bytes_per_row))
+
+
+# Alias de retrocompatibilidad
+_chunk_rows = chunk_rows
+
+
+def write_sensor_group_attrs(grp: h5py.Group, config: SensorConfig) -> None:
+    """Escribe los atributos de configuración de sensor en el grupo HDF5 correspondiente."""
+    grp.attrs["fs_hz"] = config.fs_hz
+    grp.attrs["n_samples"] = config.n_samples
+    grp.attrs["freq_limit_hz"] = config.freq_limit_hz
+    grp.attrs["axis_unit"] = config.axis_unit
+    grp.attrs["axis_scale"] = config.axis_scale
+    grp.attrs["target_block_bytes"] = config.target_block_bytes
+    grp.attrs["decimate_full_view"] = config.decimate_full_view
+    grp.attrs["has_trigger_metadata"] = config.has_trigger_metadata
 
 
 def _write_partition(
@@ -70,16 +86,9 @@ def _write_partition(
     n = indices.shape[0]
     m = block.data.shape[1] if block.data.shape[0] > 0 else config.n_samples
     grp = f.create_group(f"{group_name}/{sensor}")
-    grp.attrs["fs_hz"] = config.fs_hz
-    grp.attrs["n_samples"] = config.n_samples
-    grp.attrs["freq_limit_hz"] = config.freq_limit_hz
-    grp.attrs["axis_unit"] = config.axis_unit
-    grp.attrs["axis_scale"] = config.axis_scale
-    grp.attrs["target_block_bytes"] = config.target_block_bytes
-    grp.attrs["decimate_full_view"] = config.decimate_full_view
-    grp.attrs["has_trigger_metadata"] = config.has_trigger_metadata
+    write_sensor_group_attrs(grp, config)
 
-    row_chunk = _chunk_rows(n, m)
+    row_chunk = chunk_rows(n, m)
     data_ds = grp.create_dataset(
         "data", shape=(n, m), dtype=np.float32,
         chunks=(row_chunk, m) if n > 0 else None,
@@ -98,18 +107,24 @@ def _write_partition(
     grp.create_dataset("source_index", data=indices.astype(np.int64))
 
 
-def _write_environmental(f: h5py.File, env: EnvironmentalSeries) -> None:
+def write_environmental(f: h5py.File, env: EnvironmentalSeries) -> None:
     grp = f.create_group("environmental")
     grp.create_dataset("timestamps", data=env.timestamps)
     grp.create_dataset("temperature", data=env.temperature)
     grp.create_dataset("humidity", data=env.humidity)
 
 
-def _write_events(f: h5py.File, events: EventSeries) -> None:
+_write_environmental = write_environmental
+
+
+def write_events(f: h5py.File, events: EventSeries) -> None:
     grp = f.create_group("events")
     grp.create_dataset("timestamps", data=events.timestamps)
     dt = h5py.special_dtype(vlen=str)
     grp.create_dataset("type", data=events.event_type.astype(object), dtype=dt)
+
+
+_write_events = write_events
 
 
 def export_filtered(

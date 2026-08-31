@@ -125,6 +125,15 @@ Cambiar de partición **reinicia el filtrado**: cada partición es un conjunto d
 distinto, no una vista del mismo. El selector es inerte para los otros dos formatos de
 origen, que no tienen particiones.
 
+### Fusionar bases de datos
+
+La sección **"Fusionar bases de datos"** permite seleccionar dos archivos HDF5 independientes
+(originales o exportaciones filtradas) y combinarlos en un archivo único. El orden 1→2 fija el
+orden cronológico: el Archivo 2 se desplazará en el tiempo para comenzar inmediatamente después del
+Archivo 1, calculando el desfase exclusivamente sobre las señales para evitar huecos artificiales.
+En la costura, el solape de series ambientales con dead-time inicial se preserva y se reporta en la GUI.
+La escritura es en streaming secuencial y corre en segundo plano sin bloquear la interfaz.
+
 ---
 
 ## Documentación
@@ -141,6 +150,7 @@ origen, que no tienen particiones.
 | [archivos_md/AUTOPLAY_ENTREGA.md](archivos_md/AUTOPLAY_ENTREGA.md) | Auto-play de la gráfica #2: navegación consciente del filtrado, control de velocidad, verificación |
 | [archivos_md/MAPAS_2D_3D_ENTREGA.md](archivos_md/MAPAS_2D_3D_ENTREGA.md) | Mapas de separación #4/#5: decisiones, dos bugs de identificación de puntos encontrados en uso, rendimiento |
 | [archivos_md/EXPORTACION_FILTRADA_ENTREGA.md](archivos_md/EXPORTACION_FILTRADA_ENTREGA.md) | Exportación de datos filtrados: formato, reapertura como origen, rendimiento |
+| [archivos_md/FUSION_BASES_DATOS_ENTREGA.md](archivos_md/FUSION_BASES_DATOS_ENTREGA.md) | Fusión de dos bases de datos en una: orden cronológico, streaming secuencial, procedencia |
 | `PROMPT_Analizador_Señales_UHF_AE.md` | Especificación maestra del proyecto |
 
 ## Desarrollo

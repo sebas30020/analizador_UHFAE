@@ -269,5 +269,21 @@ def build_control_panel(
                     html.Div(id="export-status", children="", className="export-status"),
                 ],
             ),
+
+            html.Hr(),
+            html.H4("Fusionar bases de datos"),
+            html.Div(
+                title="Toma dos archivos independientes y los fusiona en uno solo. El orden 1→2 fija el "
+                      "orden cronológico: el Archivo 2 se desplazará en el tiempo para comenzar "
+                      "inmediatamente después del Archivo 1. La escritura corre en segundo plano.",
+                children=[
+                    html.Button("Seleccionar archivo 1…", id="btn-select-merge-1", n_clicks=0),
+                    html.Div(id="merge-path-label-1", children="Archivo 1: ninguno seleccionado", className="db-path-label"),
+                    html.Button("Seleccionar archivo 2…", id="btn-select-merge-2", n_clicks=0),
+                    html.Div(id="merge-path-label-2", children="Archivo 2: ninguno seleccionado", className="db-path-label"),
+                    html.Button("Fusionar bases de datos…", id="btn-merge-databases", n_clicks=0),
+                    html.Div(id="merge-status", children="", className="export-status"),
+                ],
+            ),
         ],
     )

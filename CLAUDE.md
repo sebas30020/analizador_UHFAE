@@ -76,6 +76,9 @@ ruidosamente. `docs/ARQUITECTURA.md` explica el porqué de cada una.
   §9 y `archivos_md/MAPAS_2D_3D_ENTREGA.md` §3.
 - **`T_w` en métricas de grupo intrínsecas es la duración declarada de la ventana**, jamás
   inferida de los timestamps observados.
+- **El desfase temporal de una fusión es uno solo para todo el archivo.** Calcularlo por
+  sensor desincroniza UHF y AE entre sí y no falla ruidosamente. El cálculo se basa
+  exclusivamente en señales (`t_fin_1` y `t_ini_2`), y se aplica a todas las series.
 
 ## Datos y caché
 

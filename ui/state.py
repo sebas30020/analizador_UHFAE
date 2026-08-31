@@ -150,6 +150,8 @@ class AppState:
         # hay una exportación relevante a la vez, la última.
         self._export_in_progress = False
         self._export_message = ""
+        self._merge_in_progress = False
+        self._merge_message = ""
 
     def load_dataset(self, path: str | Path, partition: ExportPartition = "resultantes") -> LoadedDataset:
         """Ingiere un archivo de origen (§10 supuesto #6 de FASE0: un archivo = un
@@ -458,6 +460,25 @@ class AppState:
         """
         with self._lock:
             return self._export_message, self._export_in_progress
+
+    def start_merge_status(self, message: str) -> None:
+        with self._lock:
+            self._merge_in_progress = True
+            self._merge_message = message
+
+    def finish_merge_status(self, message: str) -> None:
+        with self._lock:
+            self._merge_in_progress = False
+            self._merge_message = message
+
+    @property
+    def merge_status(self) -> tuple[str, bool]:
+        """``(mensaje, en_progreso)`` de la última fusión de bases de datos lanzada en este
+        proceso -- ``("", False)`` si nunca se fusionó nada. Sondeado por un
+        ``dcc.Interval`` de forma análoga a ``export_status``.
+        """
+        with self._lock:
+            return self._merge_message, self._merge_in_progress
 
 
 _STATE: AppState | None = None

@@ -18,6 +18,7 @@ from cache.service import get_or_compute_group_intrinsic, get_or_compute_group_r
 from core.grouping import resolve_groups
 from core.normalization import normalize
 from data.export import ExportPartition, export_filtered
+from data.merge import merge_datasets
 from metrics.registry import get_metric
 from ui.callbacks.filtering import (
     format_filter_status,
@@ -32,10 +33,14 @@ from ui.callbacks.helpers import (
     clamp_index,
     decode_metric_option,
     default_export_filename,
+    default_merge_filename,
     format_db_path_label,
     format_export_done_message,
     format_export_error_message,
     format_export_starting_message,
+    format_merge_done_message,
+    format_merge_error_message,
+    format_merge_starting_message,
     parse_compare_indices,
     resolve_map_axis_status,
     resolve_map_click_signal_index,
@@ -149,6 +154,34 @@ def _run_export(state: AppState, snapshot: ExportSnapshot, destination: str) -> 
 
 def _launch_export_thread(state: AppState, snapshot: ExportSnapshot, destination: str) -> None:
     thread = threading.Thread(target=_run_export, args=(state, snapshot, destination), daemon=True, name="filtered-export")
+    thread.start()
+
+
+def _run_merge(state: AppState, source1: str, source2: str, destination: str, partition: ExportPartition) -> None:
+    """Cuerpo del hilo de fusión: corre en segundo plano para no bloquear el proceso Dash."""
+    try:
+        res = merge_datasets(
+            destination=destination,
+            source1_path=source1,
+            source2_path=source2,
+            partition=partition,
+        )
+    except Exception as exc:
+        _logger.exception("etapa=merge.datasets error=fallo_fusion destino=%s", destination)
+        state.finish_merge_status(format_merge_error_message(exc))
+        return
+    state.finish_merge_status(format_merge_done_message(Path(destination), res.n_signals_total, res.seam_overlap_s))
+
+
+def _launch_merge_thread(
+    state: AppState, source1: str, source2: str, destination: str, partition: ExportPartition
+) -> None:
+    thread = threading.Thread(
+        target=_run_merge,
+        args=(state, source1, source2, destination, partition),
+        daemon=True,
+        name="dataset-merge",
+    )
     thread.start()
 
 
@@ -304,6 +337,66 @@ def register_callbacks(app: Dash) -> None:
             return message, not in_progress
 
         message, in_progress = state.export_status
+        return message, not in_progress
+
+    # --- Fusión de dos bases de datos en una -----------------------------------------
+
+    @app.callback(
+        Output("merge-path-label-1", "children"),
+        Output("merge-path-1", "data"),
+        Input("btn-select-merge-1", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _on_select_merge_1(n_clicks):
+        path = _open_file_dialog()
+        if not path:
+            raise PreventUpdate
+        return f"Archivo 1: {Path(path).name}", path
+
+    @app.callback(
+        Output("merge-path-label-2", "children"),
+        Output("merge-path-2", "data"),
+        Input("btn-select-merge-2", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _on_select_merge_2(n_clicks):
+        path = _open_file_dialog()
+        if not path:
+            raise PreventUpdate
+        return f"Archivo 2: {Path(path).name}", path
+
+    @app.callback(
+        Output("merge-status", "children"),
+        Output("merge-status-poll", "disabled"),
+        Input("btn-merge-databases", "n_clicks"),
+        Input("merge-status-poll", "n_intervals"),
+        State("merge-path-1", "data"),
+        State("merge-path-2", "data"),
+        State("load-partition", "value"),
+        prevent_initial_call=True,
+    )
+    def _on_merge_databases(n_clicks, n_intervals, path1, path2, partition_value):
+        state = get_state()
+        if ctx.triggered_id == "btn-merge-databases":
+            if not path1 or not path2:
+                return "Error: Seleccione ambos archivos antes de fusionar.", True
+            if Path(path1).resolve() == Path(path2).resolve():
+                return "Error: Los archivos 1 y 2 deben ser distintos.", True
+            p1 = Path(path1)
+            p2 = Path(path2)
+            default_name = default_merge_filename(p1, p2, datetime.now())
+            destination = _open_save_file_dialog(default_name)
+            if not destination:
+                raise PreventUpdate
+            state.start_merge_status(format_merge_starting_message(Path(destination)))
+            partition: ExportPartition = (
+                partition_value if partition_value in ("resultantes", "filtradas", "ambas") else "resultantes"
+            )
+            _launch_merge_thread(state, path1, path2, destination, partition)
+            message, in_progress = state.merge_status
+            return message, not in_progress
+
+        message, in_progress = state.merge_status
         return message, not in_progress
 
     @app.callback(

@@ -74,6 +74,11 @@ def build_sensor_window_layout(sensor: SensorName) -> html.Div:
             # deshabilitado, igual que el Interval de auto-play.
             dcc.Interval(id="export-status-poll", interval=700, disabled=True),
 
+            # Fusión de bases de datos: selección de archivos 1 y 2, e intervalo de sondeo
+            dcc.Store(id="merge-path-1", data=None),
+            dcc.Store(id="merge-path-2", data=None),
+            dcc.Interval(id="merge-status-poll", interval=700, disabled=True),
+
             html.Div(
                 className="panel-lateral",
                 children=[

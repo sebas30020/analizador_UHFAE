@@ -335,6 +335,32 @@ def format_export_error_message(exc: Exception) -> str:
     return f"Error al exportar: {exc}"
 
 
+# --- Fusión de dos bases de datos en una ------------------------------------------
+
+_MERGE_SUFFIX = "_fusionado"
+
+
+def default_merge_filename(source1_path: Path, source2_path: Path, now: datetime) -> str:
+    """Nombre por defecto para el diálogo "Guardar como" de la fusión: ambos nombres de
+    origen con sufijo y marca de tiempo."""
+    return f"{source1_path.stem}_{source2_path.stem}{_MERGE_SUFFIX}_{now:%Y%m%d_%H%M%S}.hdf5"
+
+
+def format_merge_starting_message(destination: Path) -> str:
+    return f"Fusionando a {destination.name}…"
+
+
+def format_merge_done_message(destination: Path, n_signals_total: int, seam_overlap_s: float) -> str:
+    msg = f"Fusionado: {destination.name} ({n_signals_total} señales)"
+    if seam_overlap_s > 0.0:
+        msg += f" [solape ambiental en costura: {seam_overlap_s:.1f} s]"
+    return msg
+
+
+def format_merge_error_message(exc: Exception) -> str:
+    return f"Error al fusionar: {exc}"
+
+
 _PARTITION_LABELS = {
     "resultantes": "resultantes (activas)",
     "filtradas": "filtradas (excluidas)",
