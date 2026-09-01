@@ -8,10 +8,51 @@ con el cuadrado del número de eventos (medido con los 98 eventos del dataset re
 """
 from __future__ import annotations
 
+import numpy as np
+import plotly.graph_objects as go
+
 from core.models import EventSeries
 from ui.components.time_axis import to_elapsed_minutes
 
 EVENT_COLOR = "#D14343"
+
+
+def build_event_lines_trace(
+    events: EventSeries,
+    t0: float,
+    y_min: float = 0.0,
+    y_max: float = 1.0,
+    color: str = EVENT_COLOR,
+    visible: bool = True,
+) -> go.Scatter | None:
+    """Traza única con separadores NaN que dibuja todas las líneas de evento (Fase 1, H3).
+
+    Sustituye a N `layout.shapes` individuales (que creaban N nodos en el DOM y
+    penalizaban el hover en ~3-5 ms) por una sola traza SVG `mode="lines"`.
+
+    Cada evento aporta un segmento vertical [y_min, y_max, NaN].
+    """
+    if events.timestamps.shape[0] == 0:
+        return None
+    t_ev = to_elapsed_minutes(events.timestamps, t0)
+    n = t_ev.shape[0]
+    xs = np.full(3 * n, np.nan, dtype=np.float64)
+    ys = np.full(3 * n, np.nan, dtype=np.float64)
+    xs[0::3] = t_ev
+    xs[1::3] = t_ev
+    ys[0::3] = y_min
+    ys[1::3] = y_max
+    return go.Scatter(
+        x=xs,
+        y=ys,
+        mode="lines",
+        line=dict(color=color, dash="dash", width=1),
+        name="Eventos",
+        hoverinfo="skip",
+        showlegend=False,
+        visible=visible,
+        yaxis="y1",
+    )
 
 
 def build_event_line_shapes(

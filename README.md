@@ -56,10 +56,15 @@ De arriba abajo:
 2. **Serie temporal global** (gráfica tipo #1): la envolvente min/max de **todas** las
    señales, con temperatura y humedad en el eje derecho y una línea vertical roja por
    evento. Aquí no hay diezmado: se dibuja un segmento por señal, sean 12 000 o 20 000.
+   La envolvente se renderiza con WebGL (`go.Scattergl`), codificada en `float32` para
+   reducir en un 50% el volumen de transporte binario.
    Al hacer clic en cualquier punto de la gráfica se navega a la señal más cercana en el
    tiempo, sin tener que acertarle a un segmento.
 3. **Gráficas de métricas** (tipo #3): una por cada métrica que se agregue desde el
-   selector del panel lateral, apiladas con scroll de página.
+   selector del panel lateral, apiladas con scroll de página. Cuentan con renderizado
+   adaptativo: SVG (`go.Scatter`) en régimen de grupo o datasets pequeños para máxima
+   nitidez vectorial, y WebGL (`go.Scattergl`) en régimen puntual masivo (>5 000 puntos)
+   para fluidez óptima sin sobrecargar los contextos del navegador.
 4. **Mapas de separación** (tipos #4 y #5), siempre al final: ver abajo.
 
 En el panel lateral se eligen las métricas, el reductor de grupo (mediana, media,
@@ -100,10 +105,15 @@ grupo, no solo la más cercana al clic.
 El **mapa 3D no participa del filtrado por selección**: Plotly no ofrece lazo ni caja
 dentro de una escena 3D. Sí responde al clic, igual que el 2D.
 
-En la gráfica #1 la selección se resuelve **señal a señal**, respetando también la
-amplitud: cada señal es un segmento vertical, y basta con que el lazo alcance uno de sus
-dos extremos para incluirla. Un lazo que cruce el centro de un segmento sin tocar ninguno
-de sus extremos no lo selecciona — Plotly solo conoce los vértices que dibuja.
+En la gráfica #1 la selección se resuelve **de forma exacta en el servidor**, evaluando
+la intersección geométrica de cada segmento vertical `[y_min, y_max]` con el polígono del
+lazo o el rectángulo de la caja en coordenadas de datos mediante algoritmos vectorizados
+en NumPy. Un lazo que cruce el cuerpo de un segmento vertical lo selecciona exactamente,
+aun cuando ninguno de sus dos extremos quede dentro del trazado. El navegador solo aporta
+el polígono trazado: la envolvente queda fuera del cálculo de hover (`hoverinfo="skip"`),
+que es lo que evitaba que la pestaña se congelara al pasar el ratón por encima. Se mantiene
+un fallback de compatibilidad para payloads heredados.
+
 
 ### Exportar datos filtrados
 
@@ -156,13 +166,20 @@ La escritura es en streaming secuencial y corre en segundo plano sin bloquear la
 ## Desarrollo
 
 ```bash
-pytest tests/ -q                  # suite completa
-mypy core data metrics cache ui viz utils
+pytest tests/ -q                  # suite completa (494 pruebas)
+mypy core data metrics cache ui viz utils   # análisis estático de tipos
+bash .avo/verify.sh               # contrato determinista AVO (tests + mypy)
 python -m benchmarks.run_benchmarks --dataset RUTA.hdf5 --repeats 5
 ANALIZADOR_PROFILING=1 python scripts/run_dev_server.py   # tiempos por etapa en el log
 ```
+
+El desarrollo y verificación del proyecto se rigen por el arnés AVO (`.avo/`), que mantiene
+la memoria persistente de intentos y linaje en `.avo/ledger.jsonl`, el estado en `.avo/state.md`
+y los invariantes en `.avo/knowledge.md`. El script `.avo/verify.sh` emite una señal determinista
+`{"pass": true}` que valida el 100% de las pruebas y la ausencia de errores de tipado.
 
 El caché vive en `cache_data/` y los datos `.hdf5` nunca se versionan (ver `.gitignore`).
 Borrar `cache_data/` es siempre seguro: se reconstruye solo, cada entrada está atada a
 una clave determinista que incluye el dataset, la métrica, su versión, la versión de
 normalización y los parámetros de agrupamiento.
+

@@ -7,7 +7,15 @@ y ``build_metric_figure`` solo se ejercitaban manualmente y desde ``benchmarks/`
 import numpy as np
 
 from core.models import EventSeries
-from ui.components.graph_metric import build_metric_figure
+from ui.components.graph_metric import (
+    METRIC_WEBGL_THRESHOLD,
+    PARTIAL_COLOR,
+    POINT_COLOR,
+    RAW_POINT_OPACITY_DIMMED,
+    RAW_POINT_SIZE_DEFAULT,
+    RAW_POINT_SIZE_DIMMED,
+    build_metric_figure,
+)
 from viz.smoothing import SmoothingSpec
 
 
@@ -163,3 +171,133 @@ def test_reference_value_unchanged_by_smoothing_or_connect_points():
         smoothing=SmoothingSpec(window=5.0), connect_points=True,
     )
     assert fig_plain.layout.shapes[0].y0 == fig_smoothed.layout.shapes[0].y0 == 7.0
+
+
+def test_adaptive_rendering_uses_scatter_below_default_threshold():
+    n = 1000
+    t = np.linspace(0.0, 6000.0, n)
+    v = np.sin(t / 100.0)
+    fig = build_metric_figure(t, v, _empty_events(), 0.0, label="rms")
+    assert len(fig.data) == 1
+    trace = fig.data[0]
+    assert trace.type == "scatter"
+    assert trace.mode == "markers"
+    assert len(trace.x) == n
+    assert trace.name == "rms"
+    assert trace.marker.size == RAW_POINT_SIZE_DEFAULT
+
+
+def test_adaptive_rendering_uses_scattergl_at_and_above_default_threshold():
+    # Exact threshold boundary (5000 points)
+    n_exact = METRIC_WEBGL_THRESHOLD
+    t_exact = np.linspace(0.0, 6000.0, n_exact)
+    v_exact = np.sin(t_exact / 100.0)
+    fig_exact = build_metric_figure(t_exact, v_exact, _empty_events(), 0.0, label="rms")
+    assert len(fig_exact.data) == 1
+    trace_exact = fig_exact.data[0]
+    assert trace_exact.type == "scattergl"
+    assert trace_exact.mode == "markers"
+    assert len(trace_exact.x) == n_exact
+    assert trace_exact.name == "rms"
+
+    # Above threshold (5500 points)
+    n_above = 5500
+    t_above = np.linspace(0.0, 6000.0, n_above)
+    v_above = np.cos(t_above / 100.0)
+    fig_above = build_metric_figure(t_above, v_above, _empty_events(), 0.0, label="rms")
+    assert len(fig_above.data) == 1
+    trace_above = fig_above.data[0]
+    assert trace_above.type == "scattergl"
+    assert trace_above.mode == "markers"
+    assert len(trace_above.x) == n_above
+
+
+def test_adaptive_rendering_custom_threshold_switches_mode():
+    n = 150
+    t = np.linspace(0.0, 6000.0, n)
+    v = np.sin(t / 100.0)
+
+    # Below custom threshold 200 -> Scatter (SVG)
+    fig_below = build_metric_figure(t, v, _empty_events(), 0.0, label="rms", webgl_threshold=200)
+    assert fig_below.data[0].type == "scatter"
+
+    # At or above custom threshold 100 -> Scattergl (WebGL)
+    fig_above = build_metric_figure(t, v, _empty_events(), 0.0, label="rms", webgl_threshold=100)
+    assert fig_above.data[0].type == "scattergl"
+
+    # Exact custom threshold 150 -> Scattergl (WebGL)
+    fig_exact = build_metric_figure(t, v, _empty_events(), 0.0, label="rms", webgl_threshold=150)
+    assert fig_exact.data[0].type == "scattergl"
+
+
+def test_is_partial_color_array_preserved_in_both_scatter_and_scattergl():
+    n = 100
+    t = np.linspace(0.0, 6000.0, n)
+    v = np.sin(t / 100.0)
+    is_partial = np.zeros(n, dtype=bool)
+    is_partial[10] = True
+    is_partial[50] = True
+
+    # Scatter (SVG)
+    fig_svg = build_metric_figure(
+        t, v, _empty_events(), 0.0, label="rms", is_partial=is_partial, webgl_threshold=500
+    )
+    trace_svg = fig_svg.data[0]
+    assert trace_svg.type == "scatter"
+    colors_svg = np.asarray(trace_svg.marker.color)
+    assert colors_svg[0] == POINT_COLOR
+    assert colors_svg[10] == PARTIAL_COLOR
+    assert colors_svg[50] == PARTIAL_COLOR
+
+    # Scattergl (WebGL)
+    fig_gl = build_metric_figure(
+        t, v, _empty_events(), 0.0, label="rms", is_partial=is_partial, webgl_threshold=50
+    )
+    trace_gl = fig_gl.data[0]
+    assert trace_gl.type == "scattergl"
+    colors_gl = np.asarray(trace_gl.marker.color)
+    assert colors_gl[0] == POINT_COLOR
+    assert colors_gl[10] == PARTIAL_COLOR
+    assert colors_gl[50] == PARTIAL_COLOR
+
+
+def test_dimmed_mode_opacity_preserved_in_both_scatter_and_scattergl():
+    n = 100
+    t = np.linspace(0.0, 6000.0, n)
+    v = np.sin(t / 100.0)
+    spec = SmoothingSpec(method="media_movil_temporal", window=5.0)
+
+    # Scatter (SVG) with smoothing
+    fig_svg = build_metric_figure(
+        t, v, _empty_events(), 0.0, label="rms", smoothing=spec, webgl_threshold=500
+    )
+    marker_svg = next(tr for tr in fig_svg.data if tr.mode == "markers")
+    assert marker_svg.type == "scatter"
+    assert marker_svg.opacity == RAW_POINT_OPACITY_DIMMED
+    assert marker_svg.marker.size == RAW_POINT_SIZE_DIMMED
+
+    # Scattergl (WebGL) with smoothing
+    fig_gl = build_metric_figure(
+        t, v, _empty_events(), 0.0, label="rms", smoothing=spec, webgl_threshold=50
+    )
+    marker_gl = next(tr for tr in fig_gl.data if tr.mode == "markers")
+    assert marker_gl.type == "scattergl"
+    assert marker_gl.opacity == RAW_POINT_OPACITY_DIMMED
+    assert marker_gl.marker.size == RAW_POINT_SIZE_DIMMED
+
+
+def test_scattergl_preserves_all_marker_trace_attributes():
+    n = 120
+    t = np.linspace(0.0, 6000.0, n)
+    v = np.sin(t / 50.0)
+    fig = build_metric_figure(t, v, _empty_events(), 0.0, label="kurtosis", unit="V", webgl_threshold=100)
+    trace = fig.data[0]
+    assert trace.type == "scattergl"
+    assert trace.mode == "markers"
+    assert trace.name == "kurtosis"
+    np.testing.assert_array_almost_equal(np.asarray(trace.x), t / 60.0)
+    np.testing.assert_array_almost_equal(np.asarray(trace.y), v)
+    assert trace.marker.size == RAW_POINT_SIZE_DEFAULT
+    assert trace.opacity is None or trace.opacity == 1.0
+    assert fig.layout.yaxis.title.text == "kurtosis (V)"
+

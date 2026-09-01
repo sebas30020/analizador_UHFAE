@@ -7,6 +7,8 @@ delgados sobre estas funciones.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from core.grouping import Group
@@ -16,42 +18,116 @@ from viz.decimation import ENTRIES_PER_SEGMENT
 
 
 # La envolvente es la PRIMERA traza de la gráfica #1 (``ui/components/graph_timeseries.py``);
-# las de temperatura y humedad van después, sobre el eje secundario. Filtrar por
-# ``curveNumber`` evita que un lazo que roce las series ambientales -- que no son señales --
-# acabe excluyendo señales por una correspondencia de índices que no significa nada.
+# después van temperatura y humedad sobre el eje secundario, los eventos, y por último la
+# traza ancla del lazo. Filtrar por ``curveNumber`` evita que un lazo que roce cualquiera
+# de esas -- ninguna es una señal -- acabe excluyendo señales por una correspondencia de
+# índices que no significa nada.
 TIMESERIES_ENVELOPE_CURVE = 0
 
 
-def resolve_timeseries_selection_indices(
-    selected_points: list[dict] | None, active_signal_indices: np.ndarray
-) -> list[int]:
-    """Índices globales de señal encerrados con lazo/caja en la gráfica #1.
+def intersect_lasso_segments(
+    t: np.ndarray,
+    y_min: np.ndarray,
+    y_max: np.ndarray,
+    poly_x: list[float] | np.ndarray,
+    poly_y: list[float] | np.ndarray,
+) -> np.ndarray:
+    """Máscara booleana 1D de señales cuyos segmentos verticales [y_min, y_max] en t
+    intersectan el polígono cerrado (poly_x, poly_y).
 
-    Resuelve **señal a señal**, respetando también la amplitud: cada señal se dibuja
-    como un segmento vertical de tres entradas (mínimo, máximo, separador ``NaN``, ver
-    :func:`viz.decimation.build_vertical_segments`), así que la señal del punto
-    ``pointNumber`` es ``pointNumber // ENTRIES_PER_SEGMENT``, y de ahí a índice global
-    a través de ``active_signal_indices`` (las señales que esa figura realmente dibujó,
-    ``valid_mask & active_mask``, en el mismo orden).
-
-    Sustituye a la resolución por rango de tiempo que existía hasta la rama de los mapas.
-    Aquella colapsaba cualquier selección a ``[min(x), max(x)]`` y excluía **todas** las
-    señales de esa franja temporal, ignorando por completo lo que el lazo encerraba en
-    vertical: con un lazo alto y estrecho el resultado era el correcto por casualidad,
-    pero con uno ancho excluía señales que el usuario nunca encerró. Que la gráfica #1
-    dibuje segmentos en vez de puntos sueltos no impide resolver por señal -- solo exige
-    dividir por el número de entradas que aporta cada una.
-
-    Un lazo que cruce el centro de un segmento sin contener ninguno de sus dos extremos
-    no selecciona esa señal: Plotly solo conoce los vértices que dibuja. Es coherente con
-    lo que se ve en pantalla (los extremos llevan marcador, ``mode="lines+markers"``) y
-    es preferible a la alternativa anterior, que excluía de más sin avisar.
+    Un segmento vertical [y_min, y_max] en t_i se selecciona si:
+    1. Su extremo superior (t_i, y_max) está dentro o sobre el borde del polígono (ray casting).
+    2. Su extremo inferior (t_i, y_min) está dentro o sobre el borde del polígono (ray casting).
+    3. Alguna arista del polígono cruza o toca el segmento vertical en y_cross in [y_min, y_max].
+    4. Alguna arista vertical del polígono en x = t_i se solapa con [y_min, y_max].
     """
-    if not selected_points:
-        return []
+    px = np.asarray(poly_x, dtype=np.float64)
+    py = np.asarray(poly_y, dtype=np.float64)
+    n_signals = t.shape[0]
+    if n_signals == 0 or px.shape[0] < 3 or py.shape[0] < 3:
+        return np.zeros(n_signals, dtype=bool)
+
+    if px[0] != px[-1] or py[0] != py[-1]:
+        px = np.append(px, px[0])
+        py = np.append(py, py[0])
+
+    p_xmin, p_xmax = float(np.min(px)), float(np.max(px))
+    p_ymin, p_ymax = float(np.min(py)), float(np.max(py))
+
+    # 1. Filtro rápido de Bounding Box
+    cand_mask = (t >= p_xmin) & (t <= p_xmax) & (y_min <= p_ymax) & (y_max >= p_ymin)
+    if not np.any(cand_mask):
+        return np.zeros(n_signals, dtype=bool)
+
+    cand_indices = np.where(cand_mask)[0]
+    tc = t[cand_indices, None]       # Shape (C, 1)
+    ymc = y_min[cand_indices, None]  # Shape (C, 1)
+    yMc = y_max[cand_indices, None]  # Shape (C, 1)
+
+    # 2. Vértices y aristas del polígono
+    x1, y1 = px[:-1][None, :], py[:-1][None, :]  # Shape (1, K)
+    x2, y2 = px[1:][None, :], py[1:][None, :]    # Shape (1, K)
+
+    dx = x2 - x1
+    is_vert = (dx == 0.0)
+    safe_dx = np.where(is_vert, 1.0, dx)
+
+    # 3. Ray casting hacia +Y (half-open [x1, x2) o [x2, x1))
+    crosses_x = ((x1 <= tc) & (tc < x2)) | ((x2 <= tc) & (tc < x1))
+    y_cross = y1 + (tc - x1) * (y2 - y1) / safe_dx
+
+    # Test punto-en-polígono para extremos
+    in_poly_ymin = (np.sum(crosses_x & (y_cross > ymc), axis=1) % 2 == 1)
+    in_poly_ymax = (np.sum(crosses_x & (y_cross > yMc), axis=1) % 2 == 1)
+
+    # 4. Intersección de aristas no verticales con el cuerpo del segmento
+    x_min_edge = np.minimum(x1, x2)
+    x_max_edge = np.maximum(x1, x2)
+    on_x_span = (x_min_edge <= tc) & (tc <= x_max_edge) & (~is_vert)
+    edge_hits = np.any(on_x_span & (y_cross >= ymc) & (y_cross <= yMc), axis=1)
+
+    # 5. Solape con aristas verticales
+    ey_min = np.minimum(y1, y2)
+    ey_max = np.maximum(y1, y2)
+    vert_hits = np.any(
+        is_vert & (tc == x1) & (np.maximum(ymc, ey_min) <= np.minimum(yMc, ey_max)),
+        axis=1,
+    )
+
+    hits = in_poly_ymin | in_poly_ymax | edge_hits | vert_hits
+    result_mask = np.zeros(n_signals, dtype=bool)
+    result_mask[cand_indices[hits]] = True
+    return result_mask
+
+
+def intersect_range_segments(
+    t: np.ndarray,
+    y_min: np.ndarray,
+    y_max: np.ndarray,
+    range_x: list[float] | tuple[float, ...],
+    range_y: list[float] | tuple[float, ...],
+) -> np.ndarray:
+    """Máscara booleana 1D para selección rectangular (Box Select)."""
+    n_signals = t.shape[0]
+    if n_signals == 0:
+        return np.zeros(n_signals, dtype=bool)
+
+    rx0, rx1 = min(range_x[0], range_x[1]), max(range_x[0], range_x[1])
+    ry0, ry1 = min(range_y[0], range_y[1]), max(range_y[0], range_y[1])
+
+    return (t >= rx0) & (t <= rx1) & (y_min <= ry1) & (y_max >= ry0)
+
+
+def _resolve_points_fallback(
+    points: list[dict[str, Any]],
+    active_signal_indices: np.ndarray,
+) -> np.ndarray:
+    """Fallback legacy: mapea lista de puntos vía pointNumber // ENTRIES_PER_SEGMENT."""
+    if not points or active_signal_indices.shape[0] == 0:
+        return np.array([], dtype=np.int64)
     seen: set[int] = set()
     result: list[int] = []
-    for point in selected_points:
+    for point in points:
         if point.get("curveNumber") != TIMESERIES_ENVELOPE_CURVE:
             continue
         position = point.get("pointNumber")
@@ -66,7 +142,81 @@ def resolve_timeseries_selection_indices(
         if idx not in seen:
             seen.add(idx)
             result.append(idx)
-    return result
+    return np.array(result, dtype=np.int64)
+
+
+def resolve_timeseries_selection_indices(
+    selected_data: dict[str, Any] | list[dict[str, Any]] | None,
+    active_signal_indices: np.ndarray,
+    timestamps_minutes: np.ndarray | None = None,
+    minmax: np.ndarray | None = None,
+) -> np.ndarray:
+    """Índices globales de señal seleccionados con lazo/caja en la gráfica #1 (Fase 2 / R1).
+
+    Resuelve en el servidor de forma vectorizada en NumPy:
+    1. Si `selected_data` contiene `lassoPoints`, calcula la intersección exacta de cada
+       segmento vertical [y_min, y_max] con el polígono (incluyendo extremos dentro y
+       cortes a través del cuerpo del segmento).
+    2. Si contiene `range`, calcula la intersección con el rectángulo en [rx0, rx1] x [ry0, ry1].
+    3. Si no hay coordenadas geométricas o faltan arrays temporales/minmax, cae en el
+       fallback de compatibilidad por lista de `points` (``pointNumber // ENTRIES_PER_SEGMENT``).
+
+    Retorna un array 1D de np.ndarray (dtype=int64) con los índices globales de señal.
+    """
+    if selected_data is None or active_signal_indices.shape[0] == 0:
+        return np.array([], dtype=np.int64)
+
+    if isinstance(selected_data, dict):
+        has_coords = (
+            timestamps_minutes is not None
+            and minmax is not None
+            and timestamps_minutes.shape[0] == active_signal_indices.shape[0]
+            and minmax.shape[0] == active_signal_indices.shape[0]
+        )
+
+        lasso = selected_data.get("lassoPoints")
+        if isinstance(lasso, dict) and has_coords:
+            lx = lasso.get("x") or lasso.get("xaxis")
+            ly = lasso.get("y") or lasso.get("yaxis")
+            if (
+                lx is not None
+                and ly is not None
+                and len(lx) >= 3
+                and len(ly) >= 3
+                and timestamps_minutes is not None
+                and minmax is not None
+            ):
+                mask = intersect_lasso_segments(
+                    timestamps_minutes, minmax[:, 0], minmax[:, 1], lx, ly
+                )
+                return active_signal_indices[mask].astype(np.int64)
+
+        rng = selected_data.get("range")
+        if isinstance(rng, dict) and has_coords:
+            rx = rng.get("x") or rng.get("xaxis")
+            ry = rng.get("y") or rng.get("yaxis")
+            if (
+                rx is not None
+                and ry is not None
+                and len(rx) == 2
+                and len(ry) == 2
+                and timestamps_minutes is not None
+                and minmax is not None
+            ):
+                mask = intersect_range_segments(
+                    timestamps_minutes, minmax[:, 0], minmax[:, 1], rx, ry
+                )
+                return active_signal_indices[mask].astype(np.int64)
+
+        points = selected_data.get("points")
+        if isinstance(points, list):
+            return _resolve_points_fallback(points, active_signal_indices)
+        return np.array([], dtype=np.int64)
+
+    if isinstance(selected_data, list):
+        return _resolve_points_fallback(selected_data, active_signal_indices)
+
+    return np.array([], dtype=np.int64)
 
 
 def nearest_group_index(center_timestamps: np.ndarray, timestamp: float) -> int:

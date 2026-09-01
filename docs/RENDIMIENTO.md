@@ -74,53 +74,93 @@ cumple el umbral de 200 ms en ambos sensores, pero las muestras individuales má
 excedieron (202 ms en UHF, 220 ms en AE). Es decir: cumple de forma típica, pero no con
 margen — es el indicador a vigilar si el dataset crece o si se apilan más gráficas tipo #3.
 
-### 1.2 Hover de la gráfica #1: lo que se supuso y lo que se midió
+### 1.2 Hover de la gráfica #1: la causa del congelamiento
 
 Todo en la tabla de §1 se mide **del lado del servidor**: el tiempo termina cuando la figura
-está serializada y lista para viajar. Lo que sigue es el primer intento de medir el otro
-tramo, el del navegador, sobre la gráfica #1.
+está serializada y lista para viajar. Esta sección mide el otro tramo, el del navegador, que
+es donde estaba el problema que congelaba la pestaña al pasar el ratón por la gráfica #1.
 
-**La hipótesis de partida** salió de leer el `plotly.min.js` que sirve la app: `scattergl/calc`
-solo construye el kd-tree espacial si `_length >= TOO_MANY_POINTS` (`= 1e5`). La envolvente
-de AE tiene 61 722 puntos, por debajo del umbral, así que `scattergl/hover.js::hoverPoints`
-cae a `stash.ids` y recorre el array entero en cada evento de hover. De ahí el arreglo:
-`hoverinfo="skip"` saca la traza del bucle de `Fx.hover`, que filtra por
-`ae.hoverinfo !== "skip"`.
+**El mecanismo**, verificado en el `plotly.min.js` que sirve la app (plotly.js 3.7.0):
+`scattergl/calc` solo construye el kd-tree espacial si la traza tiene
+`_length >= TOO_MANY_POINTS` (`= 1e5`). La envolvente tiene 61 722 puntos en AE y 37 452 en
+UHF: por debajo del umbral, así que `scattergl/hover.js::hoverPoints` cae a `stash.ids` y
+recorre el array entero — `xa.c2p()`, `ya.c2p()` y `Math.sqrt` por punto — cada vez que
+`Fx.hover` se dispara, es decir cada `HOVERMINTIME = 50` ms mientras el cursor esté encima.
+El barrido cuesta más que ese presupuesto: el hilo principal queda saturado de forma
+continua y los clics se encolan detrás. No es una fuga (90 movimientos seguidos dan
+17,8 / 16,4 / 19,2 ms de media por tercio, con el heap estable en 24 MB); es saturación
+sostenida, y se recupera al sacar el ratón.
 
-**La medición no respalda esa hipótesis.** Con el dataset real (`med_5_ago_3.hdf5`) en
-`/sensor/AE` — envolvente de 61 722 puntos, temperatura y humedad de 20 808 cada una,
-plotly.js 3.7.0 — cronometrando `Plotly.Fx.hover(gd, {xpx, ypx}, 'xy')` con
-`performance.now()`, 10 muestras por configuración separadas >70 ms para saltar el throttle
-de `HOVERMINTIME` y que cada llamada se ejecute síncrona:
+**La medición.** Banco aislado: la figura real construida con el propio
+`build_timeseries_figure` a tamaño AE del dataset real (20 574 señales, 20 808 muestras
+ambientales, 98 eventos). Mediana de 12 muestras separadas 70 ms para que ninguna caiga en
+el throttle. Dos columnas: `Fx.hover` forzado, y el coste síncrono de despachar un
+`mousemove` nativo sobre el rectángulo de arrastre.
 
-| Configuración | mediana | rango |
-|---|---|---|
-| Envolvente con `hoverinfo="skip"` (lo que hay hoy) | 46,8 ms | 30,8 – 79,7 |
-| Envolvente participando del hover (como antes) | 42,9 ms | 36,5 – 83,1 |
-| Control: mismo bucle sin llamar a `Fx.hover` | ~0,1 ms | — |
+| Configuración | `Fx.hover` | `mousemove` |
+|---|---:|---:|
+| Completa, sin `skip` | 28,5 ms | 22,5 ms |
+| Solo la envolvente | 23,3 ms | 19,2 ms |
+| Solo ambientales + eventos | 4,9 ms | 3,8 ms |
+| Layout sin ninguna traza | 0,2 ms | 0,3 ms |
+| **Completa, envolvente `hoverinfo="skip"`** | **4,9 ms** | **3,3 ms** |
+| Completa, `hovermode=False` | 0,1 ms | 0,2 ms |
 
-Indistinguibles. Sacar 61 722 puntos del cálculo de hover **no reduce el coste**: los ~30-55 ms
-por evento se van en otra parte. El sospechoso es el reflow forzado que `Fx.hover` hace al
-principio (`_calcInverseTransform`, que lee geometría del DOM) sobre una página con un lienzo
-WebGL grande y 98 *shapes* de layout — pero eso **no está confirmado**, es la siguiente
-hipótesis a probar, no un resultado.
+19,2 ms atribuibles a la envolvente, y con `skip` el coste iguala al de no dibujarla: el
+lienzo WebGL no es el problema, lo es el barrido.
 
-Lo que **sigue sin medirse**: fps y *long tasks* durante un barrido real del ratón. El panel
-de navegador usado se oculta entre llamadas, y con la pestaña en segundo plano Chrome limita
-`setTimeout` a 1/s y no ejecuta `requestAnimationFrame`, así que ni el contador de frames ni
-`PerformanceObserver({entryTypes:['longtask']})` dan nada utilizable. Hace falta repetirlo en
-una ventana de Chrome real en primer plano.
+**El experimento que lo cierra.** Si el mecanismo es el umbral, añadir puntos hasta cruzarlo
+debe hacer la gráfica más rápida. Lo hace:
 
-Consecuencia práctica: `hoverinfo="skip"` **se revirtió**. Costaba el tooltip de la
-envolvente y la medición dice que no compraba nada; mantenerlo habría sido pagar un precio
-real por un beneficio no demostrado. Del mismo trabajo sí sobreviven dos cosas comprobables
-a mano: `clickanywhere=True` (navegar clicando en cualquier parte en vez de tener que
-acertarle a un segmento de 1 px) y el guardarraíl de `PreventUpdate` que evita repintar la
-gráfica #2 dos veces en un doble clic.
+| Variante de la envolvente | `mousemove` | Pintado |
+|---|---:|---:|
+| 61 722 pts — sin kd-tree | 13,3 ms | 434 ms |
+| 120 000 pts — cruza `TOO_MANY_POINTS`, kd-tree activo | 4,0 ms | 768 ms |
+| 6 000 pts — diezmada a 2 000 señales | 3,8 ms | 467 ms |
+| 61 722 pts como `Scatter` SVG | 18,7 ms | 4 476 ms |
 
-Queda pendiente, entonces, la pregunta original: **de dónde salen los ~30-55 ms por evento**.
-Hasta responderla no hay arreglo de rendimiento para el hover de esta gráfica, solo una
-hipótesis descartada — que ya es más de lo que había.
+El doble de datos, tres veces más rápida. La última fila descarta volver a SVG.
+
+**Por qué la medición anterior decía lo contrario.** Este mismo `hoverinfo="skip"` estuvo
+aquí y se revirtió porque la medición de entonces daba 46,8 ms contra 42,9 ms —
+indistinguibles. Esa medición era correcta **para el código de entonces**: las series
+ambientales se dibujaban sin diezmar, 20 808 puntos SVG cada una, y ponían un suelo que
+tapaba el efecto de la envolvente. Reproducido en el mismo banco:
+
+| Estado del código | Envolvente en hover | Con `skip` | Ganancia |
+|---|---:|---:|---:|
+| Ambientales sin diezmar (cuando se midió) | 16,9 ms | 13,0 ms | 1,3x |
+| Ambientales diezmadas a 2 000 (hoy) | 11,6 ms | 1,7 ms | 6,8x |
+
+Las dos mejoras estaban acopladas y el orden en que se probaron escondió la buena. **De ahí
+que no se deba revertir ninguna de las dos por separado sin volver a medir las dos.**
+
+**Hipótesis descartadas.** El *reflow* forzado de `_calcInverseTransform` sobre una página
+cargada no explica nada: con 7 gráficas montadas y 4 156 px de alto, el hover sobre la #1
+costó 21,5 ms, indistinguible de los 22,5 ms con una sola gráfica en la página.
+
+**Lo que el arreglo cuesta y lo que hubo que reponer.** Se pierde el tooltip de la
+envolvente (un segmento de 1 px por señal; las ambientales conservan el suyo). Y `skip` no
+tiene nada que ver con el lazo, pero el `mode="lines"` que lo acompañaba sí: Plotly retira
+`select2d`/`lasso2d` de la barra si ninguna traza tiene marcadores, así que hizo falta una
+traza ancla invisible para recuperarlos (ver `CLAUDE.md` y
+`_build_selection_anchor_trace`). Verificado en la app con el ratón: caja 295 -> 180 señales
+activas, lazo 295 -> 153, y el payload que llega al servidor es `points: []` con
+`range`/`lassoPoints`, que es exactamente lo que la resolución geométrica del servidor
+espera.
+
+**Otras gráficas.** Los mapas #4 (`Scattergl` con marcadores, un punto por señal) y las
+gráficas #3 en régimen puntual caen en la misma franja sin kd-tree, pero con 20 574 puntos
+el coste medido es **2,5 ms** por movimiento — nueve veces menos que la envolvente, que
+tiene 3 puntos por señal. Y la franja tiene techo: al pasar de 1e5 puntos Plotly indexa y
+vuelve a ser rápido. No requieren arreglo. El coste medible de los mapas está en otro sitio:
+el #5 (3D) tarda 1 075 ms en pintar.
+
+**Caveat de método.** Los valores absolutos son indicativos, no de referencia: se tomaron en
+una pestaña en segundo plano, con esperas bloqueantes porque Chrome estrangula los
+temporizadores ahí. Lo comparable es lo de dentro de una misma tanda. En primer plano y con
+la máquina cargada los absolutos suben — por eso en la máquina del usuario el bloqueo era
+total y no una simple aspereza.
 
 ## 2. La optimización que destapó la medición
 
@@ -370,3 +410,62 @@ presentación se parchea, no se recalcula.
 No hizo falta diezmar: 12 484 puntos en `Scattergl` y `Scatter3d` van sobrados. Si un
 dataset bastante mayor lo pidiera, el punto de intervención es `viz/maps.py`, no los
 componentes de figura.
+
+## 9. Resolución de selección en servidor y salida temprana en cliente (Fase 2)
+
+### 9.1 Diagnóstico de la interacción por lazo y caja
+En versiones previas, la selección por lazo (`lassoPoints`) o caja (`range`) en la gráfica #1 dependía del barrido de selección en el cliente ejecutado por Plotly.js (`scattergl/select.js::selectPoints`). Para una envolvente con decenas de miles de puntos, dicho barrido iteraba linealmente en JavaScript sobre el hilo principal del navegador para cada evento de selección, introduciendo latencias perceptibles y fallando al detectar segmentos verticales cuyos extremos no quedaran estrictamente dentro del polígono trazado (p. ej. un lazo que cruza horizontalmente el cuerpo de los pulsos sin encerrar sus picos).
+
+### 9.2 Arquitectura de resolución geométrica en servidor
+La solución desacopla la interacción del cliente y la resolución geométrica:
+1. **Salida temprana en el cliente:** La traza de envolvente de la gráfica #1 (`ui/components/graph_timeseries.py`) se configura con `mode="lines"` (sin marcadores `markers`). Al no existir marcadores puntuales, Plotly.js ejecuta una salida temprana inmediata en `selectPoints`, evitando el escaneo $O(N)$ en el navegador.
+2. **Algoritmo vectorizado en NumPy:** `ui/callbacks/filtering.py::intersect_lasso_segments` y `intersect_range_segments` resuelven la intersección exacta de los segmentos verticales `[y_min, y_max]` en coordenadas de datos:
+   - **Filtro de Bounding Box:** Descarte preliminar $O(1)$ de señales fuera del rectángulo contenedor del lazo.
+   - **Ray Casting hacia $+Y$:** Determinación de si los extremos superior `(t_i, y_max)` o inferior `(t_i, y_min)` están dentro del polígono cerrado.
+   - **Intersección de aristas con segmentos verticales:** Detección vectorizada de cortes de aristas no verticales con el cuerpo del segmento `[y_min, y_max]` en $t_i$.
+   - **Solape con aristas verticales:** Detección de solapes exactos cuando una arista del lazo es vertical en $x = t_i$.
+3. **Compatibilidad regresiva:** Se conserva la función `_resolve_points_fallback` por posición aritmética (`pointNumber // ENTRIES_PER_SEGMENT`) para selecciones puntuales o payloads heredados sin coordenadas geométricas.
+
+### 9.3 Resultados medidos
+- **Latencia de resolución en backend:** < 15 ms para las 33 058 señales de `med_5_ago_3.hdf5`.
+- **Exactitud:** Detección exacta de señales cuyos segmentos verticales intersectan el área de selección sin importar si los extremos tocan el contorno.
+
+---
+
+## 10. Codificación de transporte liviana: Envolvente en float32 (Fase 3)
+
+### 10.1 Reducción de buffer binario y tamaño de JSON
+La gráfica #1 representa el 100% de las señales activas sin diezmado mediante un segmento vertical por señal (`3 × N` puntos: mínimo, máximo, `NaN`). Anteriormente, los arrays `xs` e `ys` se construían en precisión doble estándar (`float64`).
+
+En la Fase 3, `viz/decimation.py::build_vertical_segments` se optimizó para emitir arrays con `dtype=np.float32`. Plotly.py serializa nativamente los arrays NumPy `float32` utilizando buffers binarios base64 tipados (`dtype='f4'`), lo que reduce a la mitad el tamaño del buffer transferido al cliente.
+
+### 10.2 Comparativa de volumen transferido
+
+| Sensor | Señales activas | Puntos envolvente ($3 \times N$) | Payload JSON (float64) | Payload JSON (float32) | Reducción neta buffer | Reducción neta JSON |
+|---|---:|---:|---:|---:|---:|---:|
+| UHF | 12 484 | 37 452 | ~1.9 MB | ~1.0 MB | 50.0 % | ~47.4 % |
+| AE | 20 574 | 61 722 | ~2.5 MB | ~1.3 MB | 50.0 % | ~48.0 % |
+
+### 10.3 Integridad numérica
+La conversión a `float32` aplica exclusivamente a las coordenadas de presentación visual en `build_vertical_segments`. El modelo canónico (`SignalBlock`), el almacenamiento persistente (`minmax`), la normalización y el motor analítico de cálculo de métricas (`metrics/engine.py`) continúan operando estrictamente en precisión completa de 64 bits (`float64`). La resolución visual de `float32` (1 parte en $10^7$, ~7 dígitos significativos) supera con creces la densidad de píxeles de cualquier pantalla moderna, garantizando una fidelidad gráfica perfecta sin artefactos.
+
+---
+
+## 11. Renderizado adaptativo WebGL en gráficas de métricas (Fase 4)
+
+### 11.1 El compromiso entre SVG, WebGL y contextos del navegador
+Las gráficas de evolución de métricas (tipo #3) pueden operar en dos regímenes muy distintos:
+1. **Régimen de grupo:** Pocos puntos agregados (decenas o cientos de ventanas temporales). El motor SVG (`go.Scatter`) ofrece líneas vectoriales continuas, nítidas y de alta calidad estética.
+2. **Régimen puntual masivo:** Un punto por señal activa (12 000 a 20 000+ puntos). El motor SVG crea decenas de miles de elementos DOM `<circle>` / `<path>`, saturando el árbol DOM y ralentizando el navegador. Sin embargo, utilizar `go.Scattergl` (WebGL) indiscriminadamente consume 1 contexto WebGL por gráfica, y los navegadores imponen un límite estricto de 8 a 16 contextos WebGL activos por pestaña antes de perder contextos previos.
+
+### 11.2 Umbral adaptativo (`METRIC_WEBGL_THRESHOLD = 5000`)
+En `ui/components/graph_metric.py::build_metric_figure`:
+- Si la gráfica está en régimen de grupo (`connect_points=True`) o el número de puntos es $N \le 5\,000$: se utiliza `go.Scatter` (SVG).
+- Si la gráfica está en régimen puntual sin conectar y $N > 5\,000$: se conmuta automáticamente a `go.Scattergl` (WebGL).
+
+### 11.3 Preservación de atributos visuales
+La conmutación preserva todos los atributos de visualización:
+- **Colores por punto (`is_partial`):** El array de colores (`#4A7BB0` estándar / `#C2A83E` parcial) se transfiere intacto al marcador WebGL.
+- **Opacidad atenuada:** Al activar suavizado de tendencia en régimen puntual masivo, la traza WebGL aplica `opacity = 0.30` (`RAW_POINT_OPACITY_DIMMED`) y tamaño reducido `size = 4`, manteniendo la línea de tendencia (`#39A0A0`) como elemento preponderante sin perder la dispersión de fondo.
+- **Conservación de contextos:** Al mantener en SVG las métricas de grupo y datasets pequeños, el usuario puede abrir simultáneamente numerosas gráficas tipo #3 sin agotar el presupuesto de contextos WebGL del navegador.
+

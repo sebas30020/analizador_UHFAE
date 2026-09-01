@@ -156,18 +156,38 @@ señales no reconstruye la nube de puntos.
 El mapa 3D no alimenta el filtrado: Plotly no ofrece lazo ni caja de selección dentro de
 una escena `scene`. Sí responde al clic, igual que el 2D.
 
+### 6.2 Gráficas de métricas #3: renderizado adaptativo SVG / WebGL
+
+Las gráficas de evolución de métricas (`ui/components/graph_metric.py`) adaptan dinámicamente
+el motor de renderizado según el volumen de datos y el régimen:
+- **Régimen de grupo o $N \le 5\,000$ puntos (`go.Scatter` - SVG):** Ofrece trazado vectorial
+  continuo, nítido y sin artefactos. Mantiene bajo el consumo de contextos WebGL.
+- **Régimen puntual masivo $> 5\,000$ puntos (`go.Scattergl` - WebGL):** Conmuta a WebGL
+  para prevenir la sobrecarga del árbol DOM con decenas de miles de elementos SVG,
+  garantizando 60 fps en paneo y zoom.
+- **Presupuesto de contextos WebGL:** Los navegadores imponen un límite de 8 a 16 contextos
+  WebGL activos por pestaña. Si cada gráfica de métrica usara WebGL indiscriminadamente,
+  abrir múltiples métricas provocaría pérdida de contexto (*context loss*). La conmutación
+  adaptativa reserva WebGL exclusivamente para cuando el volumen de puntos lo exige.
+- **Preservación de estilo:** Ambos motores reciben y respetan los colores por punto
+  `is_partial` (`#4A7BB0` estándar / `#C2A83E` parcial) y la opacidad atenuada
+  (`RAW_POINT_OPACITY_DIMMED = 0.30`) con suavizado de tendencia activo.
+
 ## 7. Diezmado: dónde sí y dónde no
 
 `viz/decimation.py` agrega min/max por bin de píxel, de forma **exacta** (mínimo de los
 mínimos, máximo de los máximos), nunca por submuestreo.
 
-- **Gráfica #1**: no diezma. Desde la Fase 7 dibuja un segmento vertical por cada señal
-  activa, aunque sean decenas de miles — el requisito es ver el conjunto completo. Para
-  que eso sea viable la traza es `Scattergl` (WebGL) y los datos van como arrays de
-  numpy con separador `NaN`, no como listas de Python.
+- **Gráfica #1**: no diezma. Dibuja un segmento vertical por cada señal activa, aunque sean
+  decenas de miles — el requisito es ver el conjunto completo sin perder eventos breves.
+  La traza es `Scattergl` (WebGL) con `mode="lines"` y los datos se emiten como arrays
+  `np.float32` con separadores `NaN` (`build_vertical_segments`). Plotly.py serializa estos
+  arrays como buffers binarios base64 tipados (`f4`), reduciendo un 50% el buffer de transporte
+  y ~44% el JSON total sin alterar la precisión analítica de 64 bits del motor de cálculo.
 - **Gráfica #2 (AE)**: sí diezma la traza cruda de 10 000 muestras cuando se ve completa,
   y restaura resolución total al hacer zoom. La barra de metadatos siempre dice cuál de
   las dos vistas está en pantalla.
+
 
 ## 8. Las tres pruebas de fuego (PROMPT §10.3)
 
@@ -272,10 +292,32 @@ ni en los otros dos readers.
   bueno con un payload inventado. Lo que sí sobrevive el filtro son los números planos del
   evento (`curveNumber`, `pointNumber`, `x`, `y`, `z`), y por eso toda identificación de
   punto se resuelve por posición contra el array con el que se dibujó la traza.
-- **Un punto de Plotly no siempre es una señal; la conversión es aritmética, no
-  imposible.** La gráfica #1 dibuja cada señal como un segmento vertical de tres entradas
-  (mínimo, máximo, separador `NaN`, `viz/decimation.py::ENTRIES_PER_SEGMENT`), así que la
-  señal del punto `pointNumber` es `pointNumber // 3`. Hasta la rama de los mapas el
-  filtrado por lazo de esa gráfica se resolvía por rango de tiempo justamente por dar esa
-  conversión por imposible, y el resultado era que la selección ignoraba la amplitud: un
-  lazo ancho excluía todas las señales de la franja, no las que el usuario encerró.
+- **Un punto de Plotly no siempre es una señal; la conversión es aritmética y complementaria.**
+  La gráfica #1 dibuja cada señal como un segmento vertical de tres entradas
+  (mínimo, máximo, separador `NaN`, `viz/decimation.py::ENTRIES_PER_SEGMENT`), por lo que la
+  señal del punto `pointNumber` es `pointNumber // 3` (utilizado como fallback de selección
+  cuando el payload no incluye coordenadas geométricas).
+- **Resolución geométrica de selecciones en el servidor (`ui/callbacks/filtering.py`).**
+  A partir de la Fase 2, la selección por lazo (`lassoPoints`) y caja (`range`) en la gráfica #1 se
+  resuelve en el servidor de forma puramente geométrica y vectorizada en NumPy. Se evalúa
+  la intersección exacta del segmento vertical `[y_min, y_max]` con el polígono del lazo (vía
+  ray casting hacia $+Y$ y comprobación de cortes de aristas) o con el rectángulo de la caja.
+  Esto garantiza que cualquier segmento que cruce el área seleccionada sea detectado exactamente,
+  incluso si ninguno de sus extremos queda dentro del polígono trazado.
+- **La envolvente no participa del hover (`hoverinfo="skip"`).** Es lo que libera al navegador
+  del escaneo lineal $O(N)$ sobre el hilo principal: por debajo de `TOO_MANY_POINTS` (`1e5`)
+  Plotly no construye el kd-tree de `scattergl` y recorre los 61 722 puntos de la envolvente
+  cada `HOVERMINTIME` (50 ms). Medido: 22,5 ms contra 3,3 ms por `mousemove`
+  (`docs/RENDIMIENTO.md` §1.2). El precio es el tooltip de la envolvente; la navegación por
+  clic la cubre `clickanywhere`, y las series ambientales conservan el suyo.
+- **Traza ancla del lazo.** La envolvente va en `mode="lines"` sin marcadores, y también las
+  ambientales y los eventos. Plotly solo ofrece `select2d`/`lasso2d` si **alguna** traza tiene
+  marcadores o texto (`isSelectable`, `components/modebar/manage.js`), así que sin ninguna la
+  barra se queda sin los botones y el lazo deja de ser alcanzable desde la interfaz — aunque
+  toda la resolución del servidor siga intacta y con sus pruebas en verde.
+  `_build_selection_anchor_trace` añade por eso un único punto invisible con marcador
+  (`opacity=0`, `hoverinfo="skip"`, sin leyenda), colocado sobre la primera señal activa para
+  no arrastrar el autorango y **siempre en última posición** para no desplazar los
+  `curveNumber` de los que depende `ui/callbacks/filtering.py`. Forzar los botones con
+  `modeBarButtonsToAdd` no funciona: Plotly los filtra igual.
+

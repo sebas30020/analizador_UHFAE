@@ -26,22 +26,28 @@ def _envelope_point(position: int) -> dict:
 
 def test_timeseries_selection_maps_segment_position_to_signal():
     # Posiciones 0 (mínimo de la señal 4) y 3 (mínimo de la señal 9).
-    assert resolve_timeseries_selection_indices(
-        [_envelope_point(0), _envelope_point(3)], _ACTIVE_SIGNALS
+    assert list(
+        resolve_timeseries_selection_indices(
+            [_envelope_point(0), _envelope_point(3)], _ACTIVE_SIGNALS
+        )
     ) == [4, 9]
 
 
 def test_timeseries_selection_min_and_max_of_same_signal_yield_one_index():
     # Un lazo que encierra el segmento completo captura sus dos extremos (3k y 3k+1):
     # es UNA señal, no dos.
-    assert resolve_timeseries_selection_indices(
-        [_envelope_point(3), _envelope_point(4)], _ACTIVE_SIGNALS
+    assert list(
+        resolve_timeseries_selection_indices(
+            [_envelope_point(3), _envelope_point(4)], _ACTIVE_SIGNALS
+        )
     ) == [9]
 
 
 def test_timeseries_selection_only_max_endpoint_still_selects_the_signal():
     # Lazo alto que solo alcanza los máximos: la señal igual queda seleccionada.
-    assert resolve_timeseries_selection_indices([_envelope_point(7)], _ACTIVE_SIGNALS) == [11]
+    assert list(
+        resolve_timeseries_selection_indices([_envelope_point(7)], _ACTIVE_SIGNALS)
+    ) == [11]
 
 
 def test_timeseries_selection_ignores_environmental_traces():
@@ -52,23 +58,187 @@ def test_timeseries_selection_ignores_environmental_traces():
         {"curveNumber": 2, "pointNumber": 1},
         _envelope_point(0),
     ]
-    assert resolve_timeseries_selection_indices(points, _ACTIVE_SIGNALS) == [4]
+    assert list(resolve_timeseries_selection_indices(points, _ACTIVE_SIGNALS)) == [4]
 
 
 def test_timeseries_selection_out_of_range_position_is_skipped():
-    assert resolve_timeseries_selection_indices([_envelope_point(999)], _ACTIVE_SIGNALS) == []
+    assert list(
+        resolve_timeseries_selection_indices([_envelope_point(999)], _ACTIVE_SIGNALS)
+    ) == []
 
 
 def test_timeseries_selection_empty_returns_empty():
-    assert resolve_timeseries_selection_indices([], _ACTIVE_SIGNALS) == []
-    assert resolve_timeseries_selection_indices(None, _ACTIVE_SIGNALS) == []
+    assert list(resolve_timeseries_selection_indices([], _ACTIVE_SIGNALS)) == []
+    assert list(resolve_timeseries_selection_indices(None, _ACTIVE_SIGNALS)) == []
 
 
 def test_timeseries_selection_respects_amplitude_not_just_time_span():
     # Regresión del bug reportado: un lazo ancho en tiempo pero que solo encierra
     # algunos segmentos NO debe excluir todo lo que cae en esa franja temporal. Aquí el
     # usuario encerró solo la señal 9, aunque 4 y 11 estén dentro del mismo rango de X.
-    assert resolve_timeseries_selection_indices([_envelope_point(3)], _ACTIVE_SIGNALS) == [9]
+    assert list(
+        resolve_timeseries_selection_indices([_envelope_point(3)], _ACTIVE_SIGNALS)
+    ) == [9]
+
+
+# --- Pruebas de selección en servidor (Fase 2 / R1) -----------------------------------
+
+def test_timeseries_selection_lasso_points_endpoints_inside():
+    # Señales activas globales [100, 200, 300]
+    active = np.array([100, 200, 300])
+    t = np.array([1.0, 2.0, 3.0])  # minutos
+    minmax = np.array([
+        [-1.0, 1.0],   # Señal 100: extremo sup en (1.0, 1.0)
+        [-5.0, 0.0],   # Señal 200: extremo inf en (2.0, -5.0)
+        [-0.5, 0.5],   # Señal 300: en t=3.0 fuera del lazo
+    ])
+    # Lazo triangular que encierra (1.0, 1.0) y (2.0, -5.0)
+    lasso_payload = {
+        "lassoPoints": {
+            "x": [0.5, 2.5, 1.5, 0.5],
+            "y": [2.0, -6.0, 2.0, 2.0],
+        }
+    }
+    result = resolve_timeseries_selection_indices(
+        lasso_payload, active, timestamps_minutes=t, minmax=minmax
+    )
+    assert isinstance(result, np.ndarray)
+    assert list(result) == [100, 200]
+
+
+def test_timeseries_selection_lasso_cuts_through_segment_middle():
+    # Señal cuyo segmento [-10.0, 10.0] en t=1.0 atraviesa el lazo por el centro.
+    # Sus extremos (1.0, 10.0) y (1.0, -10.0) quedan FUERA del polígono, pero el
+    # cuerpo del segmento cruza las aristas del lazo.
+    active = np.array([50, 60])
+    t = np.array([1.0, 5.0])
+    minmax = np.array([
+        [-10.0, 10.0],  # Corta por el medio
+        [-1.0, 1.0],    # Fuera en t=5.0
+    ])
+    # Polígono rectangular estrecho en Y: X in [0.5, 1.5], Y in [-1.0, 1.0]
+    lasso_payload = {
+        "lassoPoints": {
+            "x": [0.5, 1.5, 1.5, 0.5, 0.5],
+            "y": [-1.0, -1.0, 1.0, 1.0, -1.0],
+        }
+    }
+    result = resolve_timeseries_selection_indices(
+        lasso_payload, active, timestamps_minutes=t, minmax=minmax
+    )
+    assert list(result) == [50]
+
+
+def test_timeseries_selection_lasso_rejects_outside_signals():
+    active = np.array([1, 2, 3, 4, 5])
+    t = np.array([0.0, 2.0, 2.0, 2.0, 10.0])
+    minmax = np.array([
+        [-1.0, 1.0],   # Señal 1: fuera a la izquierda (t=0.0)
+        [5.0, 6.0],    # Señal 2: arriba del polígono
+        [-6.0, -5.0],  # Señal 3: abajo del polígono
+        [-0.5, 0.5],   # Señal 4: dentro del polígono en t=2.0
+        [-1.0, 1.0],   # Señal 5: fuera a la derecha (t=10.0)
+    ])
+    # Diamante centrado en (2.0, 0.0) de radio 1 en X e Y
+    lasso_payload = {
+        "lassoPoints": {
+            "x": [1.0, 2.0, 3.0, 2.0, 1.0],
+            "y": [0.0, 1.0, 0.0, -1.0, 0.0],
+        }
+    }
+    result = resolve_timeseries_selection_indices(
+        lasso_payload, active, timestamps_minutes=t, minmax=minmax
+    )
+    assert list(result) == [4]
+
+
+def test_timeseries_selection_lasso_concave_c_shape():
+    # Polígono cóncavo en forma de 'C'
+    # Hueco en X in [1.5, 2.5], Y in [-0.5, 0.5]
+    active = np.array([10, 20, 30])
+    t = np.array([1.0, 2.0, 3.0])
+    minmax = np.array([
+        [-1.0, 1.0],   # Señal 10 en t=1.0: dentro de la barra izquierda de la C
+        [-0.2, 0.2],   # Señal 20 en t=2.0: en el hueco de la C (no debe seleccionarse)
+        [-1.0, 1.0],   # Señal 30 en t=3.0: fuera a la derecha
+    ])
+    c_poly_x = [0.5, 2.5, 2.5, 1.5, 1.5, 2.5, 2.5, 0.5, 0.5]
+    c_poly_y = [2.0, 2.0, 1.0, 1.0, -1.0, -1.0, -2.0, -2.0, 2.0]
+    lasso_payload = {
+        "lassoPoints": {
+            "x": c_poly_x,
+            "y": c_poly_y,
+        }
+    }
+    result = resolve_timeseries_selection_indices(
+        lasso_payload, active, timestamps_minutes=t, minmax=minmax
+    )
+    assert list(result) == [10]
+
+
+def test_timeseries_selection_range_box_selection():
+    active = np.array([10, 20, 30, 40])
+    t = np.array([1.0, 2.0, 3.0, 5.0])
+    minmax = np.array([
+        [-0.5, 0.5],    # Señal 10 en t=1.0: fuera en X
+        [-1.0, 1.0],    # Señal 20 en t=2.0: completamente dentro de la caja
+        [-10.0, 10.0],  # Señal 30 en t=3.0: atraviesa la caja verticalmente
+        [-0.5, 0.5],    # Señal 40 en t=5.0: fuera en X
+    ])
+    range_payload = {
+        "range": {
+            "x": [1.5, 3.5],
+            "y": [-2.0, 2.0],
+        }
+    }
+    result = resolve_timeseries_selection_indices(
+        range_payload, active, timestamps_minutes=t, minmax=minmax
+    )
+    assert list(result) == [20, 30]
+
+
+def test_timeseries_selection_fallback_to_points_dict():
+    # Payload con diccionario que solo contiene "points"
+    active = np.array([5, 15, 25])
+    payload = {
+        "points": [
+            {"curveNumber": 0, "pointNumber": 3},  # Señal 1 (global 15)
+        ]
+    }
+    result = resolve_timeseries_selection_indices(payload, active)
+    assert list(result) == [15]
+
+
+def test_timeseries_selection_degenerate_and_empty_payloads():
+    active = np.array([1, 2, 3])
+    t = np.array([1.0, 2.0, 3.0])
+    minmax = np.array([[-1.0, 1.0], [-1.0, 1.0], [-1.0, 1.0]])
+
+    assert list(resolve_timeseries_selection_indices(None, active)) == []
+    assert list(resolve_timeseries_selection_indices({}, active)) == []
+    assert list(resolve_timeseries_selection_indices({"points": []}, active)) == []
+    assert list(
+        resolve_timeseries_selection_indices(
+            {"lassoPoints": {"x": [1.0, 2.0], "y": [1.0, 2.0]}},  # < 3 puntos
+            active,
+            timestamps_minutes=t,
+            minmax=minmax,
+        )
+    ) == []
+    assert list(
+        resolve_timeseries_selection_indices(
+            {"range": {"x": [1.0], "y": [2.0]}},  # len != 2
+            active,
+            timestamps_minutes=t,
+            minmax=minmax,
+        )
+    ) == []
+    assert list(
+        resolve_timeseries_selection_indices(
+            {"lassoPoints": {"x": [1.0, 2.0, 3.0], "y": [1.0, 2.0, 3.0]}},
+            np.array([], dtype=int),
+        )
+    ) == []
 
 
 # --- nearest_group_index --------------------------------------------------------------

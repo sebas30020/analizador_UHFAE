@@ -118,14 +118,13 @@ def test_toggle_events_patch_hides_shapes_without_touching_anything_else(app_and
     shapes = shapes_fn(state.dataset_version, "UHF")
     fn_toggle = _wrapped(dash_app, _toggle_events_key(dash_app))
 
-    # show_events_value=[] -> ocultar; línea de referencia apagada (no forma parte de
-    # este caso de prueba).
-    ts_patch, metric_patches = fn_toggle([], [], 60.0, shapes, [])
+    ts_fig = {"data": [{"name": "Señal UHF (envolvente)"}, {"name": "Eventos"}]}
+    ts_patch, metric_patches = fn_toggle([], [], 60.0, shapes, [], ts_fig)
     ops = ts_patch.to_plotly_json()["operations"]
     assert len(ops) == 1
     assert ops[0]["operation"] == "Assign"
-    assert ops[0]["location"] == ["layout", "shapes"]
-    assert ops[0]["params"]["value"] == []
+    assert ops[0]["location"] == ["data", 1, "visible"]
+    assert ops[0]["params"]["value"] is False
     assert metric_patches == []  # sin ninguna gráfica de métrica montada en este caso
 
 
@@ -135,9 +134,11 @@ def test_toggle_events_patch_restores_the_exact_precomputed_shapes(app_and_state
     shapes = shapes_fn(state.dataset_version, "UHF")
     fn_toggle = _wrapped(dash_app, _toggle_events_key(dash_app))
 
-    ts_patch, _ = fn_toggle(["show"], [], 60.0, shapes, [])
+    ts_fig = {"data": [{"name": "Señal UHF (envolvente)"}, {"name": "Eventos"}]}
+    ts_patch, _ = fn_toggle(["show"], [], 60.0, shapes, [], ts_fig)
     ops = ts_patch.to_plotly_json()["operations"]
-    assert ops[0]["params"]["value"] == shapes
+    assert ops[0]["location"] == ["data", 1, "visible"]
+    assert ops[0]["params"]["value"] is True
 
 
 def test_toggle_events_patch_covers_every_matched_metric_graph(app_and_state):
@@ -162,8 +163,12 @@ def test_refresh_timeseries_show_events_toggles_shape_count(app_and_state):
     fn = _wrapped(dash_app, "graph-timeseries.figure")
     fig_on = fn(state.dataset_version, state.filter_version, "UHF", ["show"])
     fig_off = fn(state.dataset_version, state.filter_version, "UHF", [])
-    assert len(fig_on.layout.shapes) == 2
-    assert len(fig_off.layout.shapes) == 0
+    ev_on = next(tr for tr in fig_on.data if tr.name == "Eventos")
+    ev_off = next(tr for tr in fig_off.data if tr.name == "Eventos")
+    assert ev_on.visible is True
+    assert ev_off.visible is False
+    assert len(fig_on.layout.shapes or ()) == 0
+    assert len(fig_off.layout.shapes or ()) == 0
 
 
 def test_refresh_timeseries_uirevision_matches_sensor_and_dataset(app_and_state):

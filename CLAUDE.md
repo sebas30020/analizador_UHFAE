@@ -80,6 +80,40 @@ ruidosamente. `docs/ARQUITECTURA.md` explica el porqué de cada una.
 - **El desfase temporal de una fusión es uno solo para todo el archivo.** Calcularlo por
   sensor desincroniza UHF y AE entre sí y no falla ruidosamente. El cálculo se basa
   exclusivamente en señales (`t_fin_1` y `t_ini_2`), y se aplica a todas las series.
+- **Resolución geométrica de lazo y caja en servidor.** La selección en la gráfica #1 se
+  procesa en el servidor (`ui/callbacks/filtering.py`) evaluando la intersección del segmento
+  vertical `[y_min, y_max]` con el polígono de `lassoPoints` o rectángulo de `range`.
+  Nunca asumir que el cliente entrega la lista de `points` en una selección de área: con la
+  envolvente en `mode="lines"` llega vacía siempre (medido en la app: `points: []`,
+  `lassoPoints` con el polígono). El fallback por `points` se conserva por compatibilidad.
+- **La gráfica #1 no puede quedarse sin ninguna traza con marcadores.** Plotly solo pone
+  `select2d`/`lasso2d` en la barra de herramientas si alguna traza es "seleccionable", y
+  una traza de líneas puras no lo es (`isSelectable`, `components/modebar/manage.js`). Las
+  cuatro trazas visibles de esta gráfica son de líneas, así que el lazo depende por
+  completo de la traza ancla invisible que añade `_build_selection_anchor_trace`
+  (`ui/components/graph_timeseries.py`). Quitarla deja el filtrado por lazo inalcanzable
+  desde la interfaz **sin romper ningún test de la lógica de filtrado**, que sigue verde.
+  Forzar los botones con `modeBarButtonsToAdd` no funciona: Plotly los filtra igual.
+- **La envolvente de la gráfica #1 va con `hoverinfo="skip"`.** Por debajo de
+  `TOO_MANY_POINTS = 1e5` Plotly no construye el kd-tree de `scattergl` y recorre los
+  61 722 puntos en cada evento de hover, cada `HOVERMINTIME = 50` ms: el hilo principal se
+  satura y la pestaña se congela. Medido: 22,5 ms contra 3,3 ms por `mousemove`. Va junto
+  con el diezmado de las ambientales a 2000 bins — sin él la ganancia se cae a 1,3x,
+  que es justo lo que llevó a revertir este mismo cambio una vez (`docs/RENDIMIENTO.md`
+  §1.2). No revertirlo sin volver a medir las dos cosas a la vez.
+- **Envolvente de transporte en `float32`.** `build_vertical_segments` (`viz/decimation.py`)
+  emite arrays `np.float32` para reducir un 50% el buffer binario base64 y ~44% el JSON
+  transportado a la gráfica #1. El modelo canónico (`SignalBlock`), persistencia y cálculo
+  analítico de métricas (`metrics/engine.py`) permanecen estrictamente en 64 bits (`float64`).
+- **Umbral adaptativo WebGL en gráficas de métricas (`METRIC_WEBGL_THRESHOLD = 5000`).**
+  `ui/components/graph_metric.py` conmuta a `go.Scattergl` exclusivamente en régimen
+  puntual cuando $N > 5000$ puntos. Régimen de grupo y datasets pequeños usan siempre
+  `go.Scatter` (SVG) para asegurar nitidez vectorial y evitar agotar el presupuesto de
+  contextos WebGL del navegador (límite de 8-16 contextos).
+- **Cero diezmado en la envolvente de la serie temporal.** La gráfica #1 dibuja un segmento
+  vertical por señal activa sin diezmar (`3 × N` puntos: min, max, NaN), garantizando que
+  todas las señales activas están representadas visualmente.
+
 
 ## Datos y caché
 

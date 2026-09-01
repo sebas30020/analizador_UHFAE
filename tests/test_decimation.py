@@ -65,8 +65,64 @@ def test_build_vertical_segments_shape_and_nan_separators():
     y_max = np.array([1.0, 2.0])
     xs, ys = build_vertical_segments(x, y_min, y_max)
     assert xs.shape == (6,) and ys.shape == (6,)
+    assert xs.dtype == np.float32
+    assert ys.dtype == np.float32
     # separador cada 3 posiciones: corta la línea entre segmentos verticales
     assert np.isnan(xs[2]) and np.isnan(xs[5])
     assert np.isnan(ys[2]) and np.isnan(ys[5])
     assert ys[0] == -1.0 and ys[1] == 1.0
     assert ys[3] == -2.0 and ys[4] == 2.0
+
+
+def test_build_vertical_segments_returns_float32_with_float64_inputs():
+    # Entradas float64 típicas provenientes de SignalBlock.minmax y timestamps
+    x = np.linspace(0.0, 100.0, 1000, dtype=np.float64)
+    y_min = np.sin(x) - 1.0
+    y_max = np.sin(x) + 1.0
+
+    xs, ys = build_vertical_segments(x, y_min, y_max)
+
+    assert xs.dtype == np.float32
+    assert ys.dtype == np.float32
+    assert xs.shape == (3000,)
+    assert ys.shape == (3000,)
+
+    # Separadores NaN regulares cada 3 elementos
+    assert np.isnan(xs[2::3]).all()
+    assert np.isnan(ys[2::3]).all()
+
+    # Preservación de valores numéricos en float32
+    np.testing.assert_allclose(xs[0::3], x.astype(np.float32), rtol=1e-6)
+    np.testing.assert_allclose(xs[1::3], x.astype(np.float32), rtol=1e-6)
+    np.testing.assert_allclose(ys[0::3], y_min.astype(np.float32), rtol=1e-6)
+    np.testing.assert_allclose(ys[1::3], y_max.astype(np.float32), rtol=1e-6)
+
+
+def test_build_vertical_segments_empty_input():
+    x = np.array([], dtype=np.float64)
+    y_min = np.array([], dtype=np.float64)
+    y_max = np.array([], dtype=np.float64)
+
+    xs, ys = build_vertical_segments(x, y_min, y_max)
+
+    assert xs.dtype == np.float32
+    assert ys.dtype == np.float32
+    assert xs.shape == (0,)
+    assert ys.shape == (0,)
+
+
+def test_build_vertical_segments_large_dataset_fidelity():
+    n = 20_000
+    x = np.linspace(0.0, 500.0, n, dtype=np.float64)
+    y_min = -np.random.rand(n)
+    y_max = np.random.rand(n)
+
+    xs, ys = build_vertical_segments(x, y_min, y_max)
+
+    assert xs.dtype == np.float32
+    assert ys.dtype == np.float32
+    assert xs.shape == (3 * n,)
+    assert ys.shape == (3 * n,)
+    assert np.isnan(xs[2::3]).sum() == n
+    assert np.isnan(ys[2::3]).sum() == n
+

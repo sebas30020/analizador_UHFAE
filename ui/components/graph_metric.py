@@ -32,6 +32,8 @@ RAW_POINT_OPACITY_DIMMED = 0.30
 RAW_POINT_SIZE_DIMMED = 4
 RAW_POINT_SIZE_DEFAULT = 6
 
+METRIC_WEBGL_THRESHOLD: int = 5000
+
 
 def build_metric_figure(
     timestamps: np.ndarray,
@@ -49,6 +51,7 @@ def build_metric_figure(
     reference_value: float | None = None,
     reference_message: str | None = None,
     uirevision: str | None = None,
+    webgl_threshold: int = METRIC_WEBGL_THRESHOLD,
 ) -> go.Figure:
     """Puntos de métrica (puntual o de grupo), con unión y suavizado de presentación
     opcionales -- ver ``viz/smoothing.py`` para la implementación pura reutilizada por
@@ -86,6 +89,10 @@ def build_metric_figure(
     usuario (p. ej. conmutar la visibilidad de eventos); cambia cuando cambia el
     dataset, que es cuando el zoom debe reiniciarse.
 
+    ``webgl_threshold``: umbral de puntos a partir del cual los marcadores se
+    renderizan con ``go.Scattergl`` (WebGL) en lugar de ``go.Scatter`` (SVG) para
+    evitar sobrecarga del DOM con grandes volúmenes de señales.
+
     Los puntos de un grupo parcial (``is_partial=True``, ver ``core/grouping.py``) se
     marcan con otro color -- información propia del dato, no un elemento derivado.
 
@@ -96,10 +103,13 @@ def build_metric_figure(
     with stage("render.grafica3", metrica=label) as ctx:
         fig = go.Figure()
         x = to_elapsed_minutes(timestamps, t0)
-        ctx["n_puntos"] = int(x.shape[0])
+        n_points = int(x.shape[0])
+        ctx["n_puntos"] = n_points
 
-        if x.shape[0] > 0:
+        if n_points > 0:
             dim_markers = smoothing is not None and not connect_points
+            use_gl = n_points >= webgl_threshold
+            marker_trace_cls = go.Scattergl if use_gl else go.Scatter
 
             if connect_points:
                 x_line, y_line = split_on_gaps(x, values, gap_threshold)
@@ -116,7 +126,7 @@ def build_metric_figure(
                 colors = np.where(is_partial, PARTIAL_COLOR, POINT_COLOR)
             marker_size = RAW_POINT_SIZE_DIMMED if dim_markers else RAW_POINT_SIZE_DEFAULT
             fig.add_trace(
-                go.Scatter(
+                marker_trace_cls(
                     x=x, y=values, mode="markers",
                     marker=dict(size=marker_size, color=colors),
                     opacity=RAW_POINT_OPACITY_DIMMED if dim_markers else 1.0,

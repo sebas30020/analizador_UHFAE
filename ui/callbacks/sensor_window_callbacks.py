@@ -574,12 +574,20 @@ def register_callbacks(app: Dash) -> None:
 
         if triggered == "graph-timeseries":
             # Señal a señal, no por franja temporal: ``build_timeseries_figure`` dibuja
-            # las señales de ``valid_mask & active_mask`` en ese orden, y cada una ocupa
-            # ENTRIES_PER_SEGMENT entradas de la traza -- ver
-            # ``resolve_timeseries_selection_indices``.
-            points = (selected_timeseries or {}).get("points") or []
+            # las señales de ``valid_mask & active_mask`` en ese orden. La resolución en
+            # servidor procesa directamente ``lassoPoints`` / ``range`` contra timestamps
+            # y minmax de las señales activas, con fallback a ``points`` (Fase 2 / R1).
             active_signal_indices = np.where(block.valid_mask & state.get_active_mask(sensor))[0]
-            return resolve_timeseries_selection_indices(points, active_signal_indices)
+            if active_signal_indices.shape[0] == 0 or not selected_timeseries:
+                return []
+            t_minutes = to_elapsed_minutes(block.timestamps[active_signal_indices], dataset.t0)
+            mm_active = block.minmax[active_signal_indices]
+            return resolve_timeseries_selection_indices(
+                selected_timeseries,
+                active_signal_indices,
+                timestamps_minutes=t_minutes,
+                minmax=mm_active,
+            ).tolist()
 
         if isinstance(triggered, dict) and triggered.get("type") == "graph-map":
             if triggered["index"] != "2d":
@@ -701,9 +709,12 @@ def register_callbacks(app: Dash) -> None:
         Input("reference-line-t", "value"),
         State("event-shapes", "data"),
         State({"type": "graph-metric", "index": ALL}, "id"),
+        State("graph-timeseries", "figure"),
         prevent_initial_call=True,
     )
-    def _on_refresh_metric_decorations(show_events_value, show_reference_value, reference_t, event_shapes, metric_ids):
+    def _on_refresh_metric_decorations(
+        show_events_value, show_reference_value, reference_t, event_shapes, metric_ids, ts_fig=None
+    ):
         # Dueño único de layout.shapes / layout.annotations en las gráficas #3: eventos
         # (verticales) y línea de referencia (horizontal, archivos_md/prompt-linea-
         # referencia.md) comparten esas propiedades de layout, así que tienen que
@@ -719,9 +730,16 @@ def register_callbacks(app: Dash) -> None:
         visible_event_shapes = event_shapes if _is_checked(show_events_value, "show") else []
         reference_enabled = _is_checked(show_reference_value, "show")
         t_value = float(reference_t) if reference_t is not None else None
+        events_visible = _is_checked(show_events_value, "show")
 
         ts_patch = Patch()
-        ts_patch["layout"]["shapes"] = visible_event_shapes
+        if ts_fig:
+            data = ts_fig.get("data", []) if isinstance(ts_fig, dict) else getattr(ts_fig, "data", [])
+            for idx, trace in enumerate(data):
+                trace_name = trace.get("name") if isinstance(trace, dict) else getattr(trace, "name", None)
+                if trace_name == "Eventos":
+                    ts_patch["data"][idx]["visible"] = events_visible
+                    break
 
         registry = get_reference_registry()
         metric_patches = []
