@@ -17,3 +17,14 @@ cache_data/
 .gemini/
 .claude/hooks/
 .claude/skills/
+
+# Mismo caso, pero archivos sueltos en la raíz en vez de directorios: los genera el
+# harness AVO en cada tanda de trabajo (GEMINI.md es su equivalente de CLAUDE.md;
+# PROJECT.md y ORIGINAL_REQUEST.md, el inventario y el encargo de la tanda). Se
+# regeneran solos y arrastran rutas locales. El .gitattributes que deja solo declara
+# una estrategia de merge para .avo/ledger.jsonl, que ni siquiera está versionado.
+GEMINI.md
+PROJECT.md
+ORIGINAL_REQUEST.md
+prompt.txt
+.gitattributes
