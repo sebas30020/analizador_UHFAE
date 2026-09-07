@@ -114,6 +114,14 @@ ruidosamente. `docs/ARQUITECTURA.md` explica el porqué de cada una.
 - **Cero diezmado en la envolvente de la serie temporal.** La gráfica #1 dibuja un segmento
   vertical por señal activa sin diezmar (`3 × N` puntos: min, max, NaN), garantizando que
   todas las señales activas están representadas visualmente.
+- **El servidor es de un solo proceso.** `scripts/run_server.py` usa waitress con
+  `threads=8` y **un** proceso. El estado vive en singletons de proceso (`AppState`, el
+  `LoadedDataset`, `ui/reference_registry.py`, `ui/map_registry.py`), así que servir con
+  varios *workers* —gunicorn, uvicorn— no falla ruidosamente: cada worker tendría su copia
+  y peticiones consecutivas caerían en workers distintos, con el usuario cargando un
+  dataset y viendo "ningún archivo cargado" en la interacción siguiente. Cambiarlo exige
+  externalizar el estado primero. Y `main()` va con `debug=False`: el reloader de Werkzeug
+  duplica el proceso, que con el dataset cargado es el doble de RAM.
 
 
 ## Datos y caché
