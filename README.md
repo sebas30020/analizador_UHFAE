@@ -27,8 +27,15 @@ python -m venv .venv
 .venv\Scripts\activate            # Windows;  source .venv/bin/activate en Linux/macOS
 pip install -r requirements.txt
 
-python scripts/run_dev_server.py  # http://127.0.0.1:8050
+python scripts/run_server.py      # http://127.0.0.1:8050  (waitress, uso normal)
 ```
+
+`scripts/run_server.py` sirve con **waitress**: un solo proceso con 8 hilos, sin el aviso
+de "development server" y sin el *buffering* completo de respuesta de Werkzeug.
+`scripts/run_dev_server.py` sigue ahí para desarrollo (servidor de Flask, mismo puerto).
+El monoproceso no es una preferencia: el estado vive en singletons de proceso, así que
+servir con varios *workers* haría que una petición viera el dataset cargado y la
+siguiente no. Ver [archivos_md/PLAN_OPTIMIZACION_Y_FILTRADO.md](archivos_md/PLAN_OPTIMIZACION_Y_FILTRADO.md) §F.
 
 Abre `http://127.0.0.1:8050/sensor/UHF` (o `/sensor/AE`, `/sensor/UHF_KS`). Las tres
 rutas son la misma página servida con distinto sensor activo: para trabajar con varios a

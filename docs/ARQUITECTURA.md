@@ -321,3 +321,14 @@ ni en los otros dos readers.
   `curveNumber` de los que depende `ui/callbacks/filtering.py`. Forzar los botones con
   `modeBarButtonsToAdd` no funciona: Plotly los filtra igual.
 
+- **El servidor es monoproceso por requisito, no por preferencia.** `scripts/run_server.py`
+  arranca waitress con `threads=8` y **un solo proceso**. El estado vive en singletons de
+  proceso — `AppState`, el `LoadedDataset` de ~1 GB, `ui/reference_registry.py`,
+  `ui/map_registry.py` —, así que servir con varios *workers* (gunicorn, uvicorn) no falla
+  ruidosamente: cada worker tendría su propia copia, y peticiones consecutivas caerían en
+  workers distintos, con el usuario cargando un dataset y viendo "ningún archivo cargado" en
+  la interacción siguiente. Cambiar eso exige externalizar el estado primero. waitress es
+  además WSGI puro y nativo de Windows; ASGI no aporta nada porque Dash es WSGI síncrono y
+  los callbacks son CPU-bound. Y el cambio de servidor **no acelera el cálculo**: el cuello
+  de botella está en Python puro (ingesta, métricas, FFT, pintado), lo que lo mueve es sacar
+  el cómputo de los callbacks. Ver `archivos_md/PLAN_OPTIMIZACION_Y_FILTRADO.md` §F.

@@ -99,8 +99,11 @@ def create_app() -> Dash:
 
 
 def main() -> None:
+    # debug=False a propósito: el reloader de Werkzeug **duplica el proceso**, y con el
+    # dataset cargado eso es el doble de RAM (PLAN_OPTIMIZACION_Y_FILTRADO.md §F.3). Para
+    # servir de verdad, usa scripts/run_server.py (waitress, Etapa 6).
     app = create_app()
-    app.run(debug=True, host="127.0.0.1", port=8050)
+    app.run(debug=False, host="127.0.0.1", port=8050)
 
 
 if __name__ == "__main__":

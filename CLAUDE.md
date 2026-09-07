@@ -33,6 +33,7 @@ mypy core data metrics cache ui viz utils          # la lista de paquetes es exp
 python -m benchmarks.run_benchmarks --dataset RUTA.hdf5 --repeats 5
 ANALIZADOR_PROFILING=1 python scripts/run_dev_server.py    # tiempos por etapa en el log
 python scripts/run_dev_server.py                   # http://127.0.0.1:8050/sensor/UHF
+python scripts/run_server.py                       # waitress, monoproceso 8 hilos
 ```
 
 No hay `pyproject.toml`. El único `mypy.ini` del repo tiene una sola línea,
