@@ -1,6 +1,6 @@
 """Fusión de dos bases de datos (tests de adquisición) en un archivo HDF5 único.
 
-Diseño (ver `plan` y `archivos_md/FUSION_BASES_DATOS_ENTREGA.md`):
+Diseño (ver `archivos_md/FUSION_BASES_DATOS_ENTREGA.md`):
 - Capa de datos pura: sin Dash, sin caché, sin lock de ``AppState``.
 - Formato de salida: mismo esquema que ``data/export.py``
   (``file_type = "AnalizadorUHFAE/FilteredExport"``, ``SCHEMA_VERSION = 2``), con todas

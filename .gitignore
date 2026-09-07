@@ -28,3 +28,11 @@ PROJECT.md
 ORIGINAL_REQUEST.md
 prompt.txt
 .gitattributes
+
+# `plan` es el borrador de la tanda en curso, y el harness lo sobrescribe con un
+# documento distinto en cada una: llegó a estar versionado con el diseño de la fusión de
+# bases de datos y hoy contiene el plan de optimización. Versionarlo deja referencias que
+# envejecen mal (`data/merge.py` citaba `plan` para un diseño que ya no estaba ahí). El
+# plan de cada tanda se versiona con nombre propio en `archivos_md/PLAN_*.md`, que es lo
+# que su propio Paso 0 manda hacer; esta copia de la raíz es duplicado.
+plan
