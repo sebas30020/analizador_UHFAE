@@ -18,6 +18,7 @@ EVENT_COLOR = "#D14343"
 # Nombre de la traza ancla del lazo (ver :func:`_build_selection_anchor_trace`). No se
 # muestra en la leyenda ni en ningún tooltip; existe solo para que Plotly no retire los
 # botones de selección de la barra de herramientas.
+EMPTY_ACTIVE_SET_MESSAGE = "Sin señales activas para mostrar con el filtro actual."
 SELECTION_ANCHOR_NAME = "_ancla_seleccion"
 
 
@@ -129,7 +130,7 @@ def build_timeseries_figure(
 
         valid = block.valid_mask & active_mask
         ctx["n_senales"] = int(valid.sum())
-        anchor: go.Scatter | None = None
+        anchor: go.Scatter
         if valid.any():
             t = to_elapsed_minutes(block.timestamps[valid], t0)
             mm = block.minmax[valid]
@@ -153,6 +154,28 @@ def build_timeseries_figure(
             )
         else:
             y_min, y_max = 0.0, 1.0
+            # Anclar a la primera señal válida del dataset para que Plotly
+            # mantenga las herramientas select2d/lasso2d en el modebar
+            valid_all = np.where(block.valid_mask)[0]
+            if valid_all.size > 0:
+                t_anchor = to_elapsed_minutes(block.timestamps[valid_all[:1]], t0)
+                y_anchor = block.minmax[valid_all[:1], 0]
+            elif block.timestamps.shape[0] > 0:
+                t_anchor = to_elapsed_minutes(block.timestamps[:1], t0)
+                y_anchor = np.array([0.0])
+            else:
+                t_anchor = np.array([0.0])
+                y_anchor = np.array([0.0])
+            anchor = _build_selection_anchor_trace(t_anchor, y_anchor)
+            fig.add_annotation(
+                text=EMPTY_ACTIVE_SET_MESSAGE,
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=0.5,
+                showarrow=False,
+                font=dict(size=14, color="#666666"),
+            )
 
         if environmental.timestamps.shape[0] > 0:
             t_env = to_elapsed_minutes(environmental.timestamps, t0)
@@ -193,10 +216,8 @@ def build_timeseries_figure(
             if event_trace is not None:
                 fig.add_trace(event_trace)
 
-        # Siempre la última: ver :func:`_build_selection_anchor_trace`. Sin señales
-        # activas no se añade -- no hay nada que encerrar con el lazo.
-        if anchor is not None:
-            fig.add_trace(anchor)
+        # Siempre la última: ver :func:`_build_selection_anchor_trace`.
+        fig.add_trace(anchor)
 
         fig.update_layout(
             xaxis=dict(title=TIME_AXIS_TITLE),

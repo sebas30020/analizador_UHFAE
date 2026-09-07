@@ -8,6 +8,7 @@ import numpy as np
 
 from core.models import EventSeries
 from ui.components.graph_metric import (
+    EMPTY_ACTIVE_SET_MESSAGE,
     METRIC_WEBGL_THRESHOLD,
     PARTIAL_COLOR,
     POINT_COLOR,
@@ -295,9 +296,31 @@ def test_scattergl_preserves_all_marker_trace_attributes():
     assert trace.type == "scattergl"
     assert trace.mode == "markers"
     assert trace.name == "kurtosis"
-    np.testing.assert_array_almost_equal(np.asarray(trace.x), t / 60.0)
-    np.testing.assert_array_almost_equal(np.asarray(trace.y), v)
+    np.testing.assert_allclose(np.asarray(trace.x), t / 60.0, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(trace.y), v, rtol=1e-5, atol=1e-5)
     assert trace.marker.size == RAW_POINT_SIZE_DEFAULT
     assert trace.opacity is None or trace.opacity == 1.0
     assert fig.layout.yaxis.title.text == "kurtosis (V)"
+
+
+def test_metric_figure_with_zero_points_shows_empty_active_set_message():
+    t_empty = np.array([], dtype=np.float64)
+    v_empty = np.array([], dtype=np.float64)
+    fig = build_metric_figure(t_empty, v_empty, _empty_events(), 0.0, label="rms")
+    assert len(fig.data) == 0
+    assert any(EMPTY_ACTIVE_SET_MESSAGE in str(ann.text) for ann in fig.layout.annotations)
+
+
+def test_metric_figure_encodes_coordinates_as_float32():
+    n = 50
+    t = np.linspace(0.0, 3000.0, n)
+    v = np.sin(t / 100.0)
+    spec = SmoothingSpec(method="media_movil_temporal", window=5.0)
+    fig = build_metric_figure(t, v, _empty_events(), 0.0, label="rms", smoothing=spec, connect_points=True)
+
+    for trace in fig.data:
+        x_arr = np.asarray(trace.x)
+        y_arr = np.asarray(trace.y)
+        assert x_arr.dtype == np.float32
+        assert y_arr.dtype == np.float32
 

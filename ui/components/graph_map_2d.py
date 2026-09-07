@@ -15,6 +15,7 @@ son iconos del modebar por defecto -- lo que activa el filtrado es el callback q
 """
 from __future__ import annotations
 
+import numpy as np
 import plotly.graph_objects as go
 
 from ui.components.graph_map_common import (
@@ -26,6 +27,7 @@ from ui.components.graph_map_common import (
     POINT_MARKER_SIZE_2D,
     build_map_info_annotation,
     build_omitted_message,
+    sanitize_map_customdata,
 )
 from viz.maps import MapDataset, resolve_map_highlight_coords
 
@@ -52,8 +54,8 @@ def build_map_2d_figure(
     ``same_metric_warning``: la misma métrica en ambos ejes es válida (§3 del prompt),
     pero se avisa con una anotación discreta en vez de silenciarlo.
     """
-    x, y = dataset.coords["x"], dataset.coords["y"]
-    indices = dataset.signal_indices
+    x, y = dataset.coords["x"].astype(np.float32, copy=False), dataset.coords["y"].astype(np.float32, copy=False)
+    indices = sanitize_map_customdata(dataset.signal_indices)
 
     fig = go.Figure()
     fig.add_trace(

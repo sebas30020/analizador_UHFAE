@@ -34,6 +34,8 @@ RAW_POINT_SIZE_DEFAULT = 6
 
 METRIC_WEBGL_THRESHOLD: int = 5000
 
+EMPTY_ACTIVE_SET_MESSAGE = "Sin señales activas para mostrar con el filtro actual."
+
 
 def build_metric_figure(
     timestamps: np.ndarray,
@@ -107,15 +109,19 @@ def build_metric_figure(
         ctx["n_puntos"] = n_points
 
         if n_points > 0:
+            x_f32 = x.astype(np.float32, copy=False)
+            values_f32 = values.astype(np.float32, copy=False)
             dim_markers = smoothing is not None and not connect_points
             use_gl = n_points >= webgl_threshold
             marker_trace_cls = go.Scattergl if use_gl else go.Scatter
 
             if connect_points:
-                x_line, y_line = split_on_gaps(x, values, gap_threshold)
+                x_line, y_line = split_on_gaps(x_f32, values_f32, gap_threshold)
                 fig.add_trace(
                     go.Scatter(
-                        x=x_line, y=y_line, mode="lines",
+                        x=x_line.astype(np.float32, copy=False),
+                        y=y_line.astype(np.float32, copy=False),
+                        mode="lines",
                         line=dict(color=POINT_COLOR, width=1.5),
                         name=label, hoverinfo="skip",
                     )
@@ -127,7 +133,7 @@ def build_metric_figure(
             marker_size = RAW_POINT_SIZE_DIMMED if dim_markers else RAW_POINT_SIZE_DEFAULT
             fig.add_trace(
                 marker_trace_cls(
-                    x=x, y=values, mode="markers",
+                    x=x_f32, y=values_f32, mode="markers",
                     marker=dict(size=marker_size, color=colors),
                     opacity=RAW_POINT_OPACITY_DIMMED if dim_markers else 1.0,
                     name=label,
@@ -135,11 +141,13 @@ def build_metric_figure(
             )
 
             if smoothing is not None:
-                x_smooth, y_smooth = smooth(x, values, method=smoothing.method, window=smoothing.window)
+                x_smooth, y_smooth = smooth(x_f32, values_f32, method=smoothing.method, window=smoothing.window)
                 x_smooth, y_smooth = split_on_gaps(x_smooth, y_smooth, gap_threshold)
                 fig.add_trace(
                     go.Scatter(
-                        x=x_smooth, y=y_smooth, mode="lines",
+                        x=x_smooth.astype(np.float32, copy=False),
+                        y=y_smooth.astype(np.float32, copy=False),
+                        mode="lines",
                         line=dict(color=TREND_COLOR, width=2.5),
                         name=f"{label} (tendencia)", hoverinfo="skip",
                     )
@@ -154,7 +162,19 @@ def build_metric_figure(
 
         shapes = build_event_line_shapes(events, t0, EVENT_COLOR, visible=show_events)
         annotations: list[dict] = []
-        if reference_value is not None:
+        if n_points == 0:
+            annotations.append(
+                dict(
+                    text=EMPTY_ACTIVE_SET_MESSAGE,
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(size=13, color="#666666"),
+                )
+            )
+        elif reference_value is not None:
             shapes = [*shapes, build_reference_shape(reference_value)]
             annotations = [build_reference_annotation(reference_value, unit=unit)]
         elif reference_message is not None:

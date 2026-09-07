@@ -44,6 +44,7 @@ Reglas de la medición, para que dos corridas sean comparables:
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import platform
 import shutil
@@ -70,7 +71,7 @@ from ui.components.graph_timeseries import build_timeseries_figure
 from ui.components.reference_line import build_reference_annotation, build_reference_shape
 from ui.reference_registry import ReferenceSeriesRegistry
 from ui.state import AppState
-from utils.profiling import get_records, reset_records, set_enabled
+from utils.profiling import get_records, measure_process_memory, reset_records, set_enabled
 from viz.reference_line import build_prefix_sums
 from viz.reference_line import mean_until as reference_mean_until
 
@@ -92,6 +93,15 @@ OBJETIVO_CAMBIO_SENAL_MS = {"UHF": 100.0, "AE": 250.0}
 OBJETIVO_TOGGLE_REFERENCIA_MS = 50.0
 
 
+def _serializar_bytes(fig: Any) -> tuple[int, int]:
+    """Serializa la figura a JSON y calcula (bytes_json, bytes_gzip) para medir
+    el volumen de transporte de red tanto en crudo como comprimido."""
+    json_str = pio.to_json(fig)
+    raw = json_str.encode("utf-8")
+    compressed = gzip.compress(raw, compresslevel=6)
+    return len(raw), len(compressed)
+
+
 def _serializar(fig: Any) -> int:
     """Serializa la figura como lo hace Dash al responder un callback. Retorna el tamaño
     en bytes para poder correlacionar tiempo con volumen transferido."""
@@ -110,7 +120,9 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
         state = AppState(cache_dir=cache_dir, warmup_on_load=False)
 
         # --- 1. Ingesta (una sola vez: no es repetible sin volver a leer del disco) ----
+        mem_before_ingest = measure_process_memory()
         ingesta_ms, dataset = measure_once(lambda: state.load_dataset(dataset_path))
+        mem_after_ingest = measure_process_memory()
         sensores = [s for s, b in dataset.blocks.items() if b.data.shape[0] > 0]
         n_total = sum(dataset.blocks[s].data.shape[0] for s in sensores)
 
@@ -130,6 +142,9 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                         "n_senales": n,
                         "throughput_senales_por_s": round(n / (ms / 1000.0), 1) if ms and ms == ms else None,
                         "n_muestras_por_senal": int(dataset.blocks[sensor].data.shape[1]),
+                        "rss_mb": round(mem_after_ingest["rss_bytes"] / (1024 * 1024), 1),
+                        "rss_pico_mb": round(mem_after_ingest["peak_rss_bytes"] / (1024 * 1024), 1),
+                        "rss_delta_mb": round((mem_after_ingest["rss_bytes"] - mem_before_ingest["rss_bytes"]) / (1024 * 1024), 1),
                     },
                 )
             )
@@ -141,20 +156,29 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
             mask = state.get_active_mask(sensor)
 
             # --- 2. Render inicial de la gráfica tipo #1 -------------------------------
+            fig_g1_sample = build_timeseries_figure(
+                cfg, block, dataset.environmental, dataset.events, dataset.t0, mask
+            )
+            bytes_json_g1, bytes_gzip_g1 = _serializar_bytes(fig_g1_sample)
+
             def render_g1() -> int:
                 fig = build_timeseries_figure(
                     cfg, block, dataset.environmental, dataset.events, dataset.t0, mask
                 )
                 return _serializar(fig)
 
-            bytes_json = render_g1()
             mediana, mn, mx = measure(render_g1, repeats=repeats)
             resultados.append(
                 BenchmarkResult(
                     operacion="Render gráfica #1 (dataset completo)", sensor=sensor,
                     mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
                     objetivo_ms=OBJETIVO_RENDER_G1_MS,
-                    notas={"n_senales_dibujadas": int((block.valid_mask & mask).sum()), "bytes_json": bytes_json},
+                    notas={
+                        "n_senales_dibujadas": int((block.valid_mask & mask).sum()),
+                        "bytes_json": bytes_json_g1,
+                        "bytes_gzip": bytes_gzip_g1,
+                        "rss_mb": round(measure_process_memory()["rss_bytes"] / (1024 * 1024), 1),
+                    },
                 )
             )
 
@@ -173,6 +197,7 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                             "dominio": get_metric(metric_id).dominio,
                             "n_senales": int(block.valid_mask.sum()),
                             "senales_por_s": round(int(block.valid_mask.sum()) / (ms / 1000.0), 1),
+                            "rss_mb": round(measure_process_memory()["rss_bytes"] / (1024 * 1024), 1),
                         },
                     )
                 )
@@ -185,7 +210,10 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                         operacion=f"Lectura desde caché '{metric_id}'", sensor=sensor,
                         mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
                         objetivo_ms=OBJETIVO_CACHE_MS,
-                        notas={"n_puntos": int(block.valid_mask.sum())},
+                        notas={
+                            "n_puntos": int(block.valid_mask.sum()),
+                            "rss_mb": round(measure_process_memory()["rss_bytes"] / (1024 * 1024), 1),
+                        },
                     )
                 )
 
@@ -194,6 +222,8 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
             # de calcular la métrica, necesario para medir el suavizado de presentación
             # por separado del cálculo). ------------------------------------------------
             ts_rms, vals_rms = calcular(METRICA_TIEMPO)
+            fig_g3_sample = build_metric_figure(ts_rms, vals_rms, dataset.events, dataset.t0, label=METRICA_TIEMPO)
+            bytes_json_g3, bytes_gzip_g3 = _serializar_bytes(fig_g3_sample)
 
             def render_g3_puntual() -> int:
                 fig = build_metric_figure(ts_rms, vals_rms, dataset.events, dataset.t0, label=METRICA_TIEMPO)
@@ -205,7 +235,13 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                     operacion="Render gráfica #3 (puntual, dataset completo)", sensor=sensor,
                     mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
                     objetivo_ms=None,
-                    notas={"metrica": METRICA_TIEMPO, "n_puntos": int(ts_rms.shape[0])},
+                    notas={
+                        "metrica": METRICA_TIEMPO,
+                        "n_puntos": int(ts_rms.shape[0]),
+                        "bytes_json": bytes_json_g3,
+                        "bytes_gzip": bytes_gzip_g3,
+                        "rss_mb": round(measure_process_memory()["rss_bytes"] / (1024 * 1024), 1),
+                    },
                 )
             )
 
@@ -214,6 +250,10 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
             ts_grp, vals_grp, part_grp = get_or_compute_group_intrinsic(
                 state.cache, block, cfg, dataset.dataset_id, METRICA_GRUPO, modo, ventana
             )
+            fig_grp_sample = build_metric_figure(
+                ts_grp, vals_grp, dataset.events, dataset.t0, label=METRICA_GRUPO, is_partial=part_grp
+            )
+            bytes_json_grp, bytes_gzip_grp = _serializar_bytes(fig_grp_sample)
 
             def render_g3_grupo() -> int:
                 fig = build_metric_figure(
@@ -227,7 +267,13 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                     operacion="Render gráfica #3 (grupo, by_time 60 s)", sensor=sensor,
                     mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
                     objetivo_ms=None,
-                    notas={"metrica": METRICA_GRUPO, "n_puntos": int(ts_grp.shape[0])},
+                    notas={
+                        "metrica": METRICA_GRUPO,
+                        "n_puntos": int(ts_grp.shape[0]),
+                        "bytes_json": bytes_json_grp,
+                        "bytes_gzip": bytes_gzip_grp,
+                        "rss_mb": round(measure_process_memory()["rss_bytes"] / (1024 * 1024), 1),
+                    },
                 )
             )
 
@@ -242,13 +288,23 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                 fig, _ = build_signal_figure(cfg, fila)
                 return _serializar(fig)
 
+            fila_demo = normalize(block.data[[0]], block.vrange[[0]])[0]
+            fig_g2_sample, _ = build_signal_figure(cfg, fila_demo)
+            bytes_json_g2, bytes_gzip_g2 = _serializar_bytes(fig_g2_sample)
+
             mediana, mn, mx = measure(cambio_senal, repeats=repeats)
             resultados.append(
                 BenchmarkResult(
                     operacion="Cambio de señal (gráfica #2)", sensor=sensor,
                     mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
                     objetivo_ms=OBJETIVO_CAMBIO_SENAL_MS.get(sensor),
-                    notas={"n_muestras": int(block.data.shape[1]), "diezmada": sensor == "AE"},
+                    notas={
+                        "n_muestras": int(block.data.shape[1]),
+                        "diezmada": sensor == "AE",
+                        "bytes_json": bytes_json_g2,
+                        "bytes_gzip": bytes_gzip_g2,
+                        "rss_mb": round(measure_process_memory()["rss_bytes"] / (1024 * 1024), 1),
+                    },
                 )
             )
 
@@ -287,7 +343,11 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                     operacion="Filtro + propagación (#1 + 2 gráficas #3)", sensor=sensor,
                     mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
                     objetivo_ms=OBJETIVO_FILTRO_MS,
-                    notas={"n_excluidas": int(a_excluir.size), "metrica_grupo": METRICA_GRUPO},
+                    notas={
+                        "n_excluidas": int(a_excluir.size),
+                        "metrica_grupo": METRICA_GRUPO,
+                        "rss_mb": round(measure_process_memory()["rss_bytes"] / (1024 * 1024), 1),
+                    },
                 )
             )
 
@@ -411,6 +471,11 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
             # diferencia es `reference_value` -- esa comparación ES la "línea base con
             # la funcionalidad apagada" que pide el §4.2.5.
             valor_referencia = registro_bench.mean_until("puntual:rms", t_completo)
+            fig_ref_sample = build_metric_figure(
+                ts_rms, vals_rms, dataset.events, dataset.t0, label=METRICA_TIEMPO,
+                reference_value=valor_referencia,
+            )
+            bytes_json_ref, bytes_gzip_ref = _serializar_bytes(fig_ref_sample)
 
             def render_g3_puntual_con_referencia() -> int:
                 fig = build_metric_figure(
@@ -425,10 +490,17 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                     operacion="Render gráfica #3 (puntual, línea de referencia activa)", sensor=sensor,
                     mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
                     objetivo_ms=None,
-                    notas={"metrica": METRICA_TIEMPO, "n_puntos": int(ts_rms.shape[0])},
+                    notas={
+                        "metrica": METRICA_TIEMPO,
+                        "n_puntos": int(ts_rms.shape[0]),
+                        "bytes_json": bytes_json_ref,
+                        "bytes_gzip": bytes_gzip_ref,
+                        "rss_mb": round(measure_process_memory()["rss_bytes"] / (1024 * 1024), 1),
+                    },
                 )
             )
 
+        mem_final = measure_process_memory()
         metadata = {
             "fecha_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             "dataset": str(dataset_path),
@@ -436,6 +508,8 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
             "n_senales_total": n_total,
             "ingesta_total_ms": round(ingesta_ms, 1),
             "throughput_total_senales_por_s": round(n_total / (ingesta_ms / 1000.0), 1),
+            "rss_pico_mb": round(mem_final["peak_rss_bytes"] / (1024 * 1024), 1),
+            "rss_final_mb": round(mem_final["rss_bytes"] / (1024 * 1024), 1),
             "repeticiones": repeats,
             "python": platform.python_version(),
             "plataforma": f"{platform.system()} {platform.release()}",
@@ -455,6 +529,11 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=5, help="Muestras por operación repetible (default: 5)")
     parser.add_argument("--json", type=Path, default=None, help="Escribe el reporte completo en este archivo JSON")
     parser.add_argument("--markdown", type=Path, default=None, help="Escribe la tabla markdown en este archivo")
+    parser.add_argument(
+        "--baseline",
+        action="store_true",
+        help="Archiva la línea base automáticamente en docs/benchmarks_baseline_2026.json",
+    )
     args = parser.parse_args()
 
     if not args.dataset.exists():
@@ -466,6 +545,7 @@ def main() -> None:
     print(f"\nDataset: {metadata['dataset']}")
     print(f"Señales totales: {metadata['n_senales_total']} · ingesta {metadata['ingesta_total_ms']:.0f} ms "
           f"({metadata['throughput_total_senales_por_s']:.0f} señales/s)")
+    print(f"RSS pico: {metadata['rss_pico_mb']:.1f} MB · RSS final: {metadata['rss_final_mb']:.1f} MB")
     print(f"{metadata['plataforma']} · Python {metadata['python']} · mediana de {metadata['repeticiones']} muestras\n")
     print(tabla)
 
@@ -474,9 +554,14 @@ def main() -> None:
     for r in incumplidos:
         print(f"  - {r.operacion} [{r.sensor}]: {r.mediana_ms:.0f} ms (objetivo < {r.objetivo_ms:.0f} ms)")
 
-    if args.json:
-        args.json.write_text(json.dumps(to_json_dict(resultados, metadata), indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"\nJSON escrito en {args.json}")
+    json_path = args.json
+    if args.baseline and json_path is None:
+        json_path = Path("docs/benchmarks_baseline_2026.json")
+
+    if json_path:
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(to_json_dict(resultados, metadata), indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"\nJSON escrito en {json_path}")
     if args.markdown:
         args.markdown.write_text(tabla + "\n", encoding="utf-8")
         print(f"Tabla escrita en {args.markdown}")

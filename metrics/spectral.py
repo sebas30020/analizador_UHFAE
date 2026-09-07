@@ -35,8 +35,8 @@ def compute_spectrum(signal_matrix: np.ndarray, fs_hz: float, freq_limit_hz: flo
     with stage("metricas.espectro", n_senales=signal_matrix.shape[0], n_muestras=signal_matrix.shape[-1]):
         n_points = signal_matrix.shape[-1]
         fft_vals = sfft.rfft(signal_matrix, axis=-1, workers=-1)
-        mag2 = np.abs(fft_vals) ** 2
         freqs = sfft.rfftfreq(n_points, d=1.0 / fs_hz)
-
-        mask = freqs <= freq_limit_hz
-        return SpectrumResult(freqs_hz=freqs[mask], mag2=mag2[..., mask])
+        k = int(np.searchsorted(freqs, freq_limit_hz, side="right"))
+        fft_trunc = fft_vals[..., :k]
+        mag2 = fft_trunc.real ** 2 + fft_trunc.imag ** 2
+        return SpectrumResult(freqs_hz=freqs[:k], mag2=mag2)

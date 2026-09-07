@@ -19,8 +19,11 @@ en ``viz/reference_line.py`` sobre datos ya obtenidos, nunca aquí.
 """
 from __future__ import annotations
 
+from typing import Any, Sequence
+
 from dash import dcc, html
 
+from core.metric_filters import MetricCondition, condition_key
 from core.models import SensorName
 from metrics.registry import list_metrics
 from ui.callbacks.helpers import encode_metric_option
@@ -43,6 +46,43 @@ def _puntual_metric_axis_options() -> list[dict]:
         unit = f" ({d.unit})" if d.unit else ""
         options.append({"label": f"{d.label}{unit}", "value": d.id})
     return options
+
+
+def build_metric_filter_badges(conditions: Sequence[MetricCondition]) -> list[Any]:
+    """Renderiza las etiquetas de condiciones activas con botones de eliminación identificados por clave canónica."""
+    if not conditions:
+        return []
+    labels = {opt["value"]: opt["label"] for opt in _puntual_metric_axis_options()}
+    badges: list[Any] = []
+    for c in conditions:
+        metric_label = labels.get(c.metric_name, c.metric_name)
+        c_key = condition_key(c)
+        badges.append(
+            html.Div(
+                className="metric-filter-badge",
+                children=[
+                    html.Span(f"{metric_label} {c.operator} {c.threshold:g}"),
+                    html.Button(
+                        "×",
+                        id={"type": "btn-remove-metric-filter", "index": c_key},
+                        className="btn-remove-filter",
+                        title="Eliminar este filtro",
+                        n_clicks=0,
+                        style={"marginLeft": "6px", "cursor": "pointer", "border": "none", "background": "none", "fontWeight": "bold"},
+                    ),
+                ],
+                style={
+                    "display": "inline-flex",
+                    "alignItems": "center",
+                    "backgroundColor": "#e9ecef",
+                    "borderRadius": "4px",
+                    "padding": "2px 8px",
+                    "margin": "3px 4px 3px 0",
+                    "fontSize": "0.85em",
+                },
+            )
+        )
+    return badges
 
 
 def _all_metric_options() -> list[dict]:
@@ -124,7 +164,7 @@ def build_control_panel(
                 clearable=False,
             ),
             html.Label("Percentil (%)", title="Percentil usado cuando el reductor de grupo es \"Percentil\"."),
-            dcc.Input(id="grouping-percentile-q", type="number", value=75.0, min=0, max=100, style={"width": "100%"}),
+            dcc.Input(id="grouping-percentile-q", type="number", value=75.0, min=0, max=100, debounce=True, style={"width": "100%"}),
             html.Label("Criterio de agrupamiento"),
             dcc.Dropdown(
                 id="grouping-mode",
@@ -139,7 +179,7 @@ def build_control_panel(
                 "Ventana de agrupamiento",
                 title="Duración de la ventana en segundos (agrupamiento por ventana temporal) o número de señales por grupo (agrupamiento por cantidad).",
             ),
-            dcc.Input(id="grouping-value", type="number", value=60.0, min=0.000001, style={"width": "100%"}),
+            dcc.Input(id="grouping-value", type="number", value=60.0, min=0.000001, debounce=True, style={"width": "100%"}),
 
             html.Hr(),
             html.H4("Opciones de visualización"),
@@ -178,12 +218,12 @@ def build_control_panel(
                 clearable=False,
             ),
             html.Label(id="smoothing-window-label", children="Ventana de suavizado (min)"),
-            dcc.Input(id="smoothing-window", type="number", value=5.0, min=0.01, style={"width": "100%"}),
+            dcc.Input(id="smoothing-window", type="number", value=5.0, min=0.01, debounce=True, style={"width": "100%"}),
             html.Label(
                 "Cortar la línea en huecos mayores a (min)",
                 title="Umbral de tiempo a partir del cual la línea se corta en vez de unir a través de un hueco de adquisición. Vacío: se calcula automáticamente a partir del espaciado real de los datos.",
             ),
-            dcc.Input(id="gap-threshold", type="number", placeholder="Automático", style={"width": "100%"}),
+            dcc.Input(id="gap-threshold", type="number", placeholder="Automático", debounce=True, style={"width": "100%"}),
 
             html.Div(
                 title="Dibuja, en cada gráfica de métrica, una línea horizontal con el promedio de esa métrica entre el inicio del experimento y el minuto definido más abajo. No recalcula ninguna métrica ni altera el zoom o el paneo ya aplicados.",
@@ -246,6 +286,43 @@ def build_control_panel(
                 id="map-3d-z-metric", options=_puntual_metric_axis_options(),
                 value=None, clearable=True, placeholder="Métrica para el eje Z",
             ),
+
+            html.Hr(),
+            html.H4("Filtros por métricas"),
+            html.Label("Métrica"),
+            dcc.Dropdown(
+                id="metric-filter-metric",
+                options=_puntual_metric_axis_options(),
+                placeholder="Seleccionar métrica puntual",
+                clearable=False,
+            ),
+            html.Label("Operador"),
+            dcc.Dropdown(
+                id="metric-filter-operator",
+                options=[
+                    {"label": "≥ mayor o igual que", "value": ">="},
+                    {"label": "≤ menor o igual que", "value": "<="},
+                ],
+                value=">=",
+                clearable=False,
+            ),
+            html.Label("Umbral"),
+            dcc.Input(
+                id="metric-filter-value",
+                type="number",
+                placeholder="Valor numérico",
+                debounce=True,
+                style={"width": "100%"},
+            ),
+            html.Div(
+                className="filter-buttons",
+                children=[
+                    html.Button("Añadir filtro", id="btn-add-metric-filter", n_clicks=0),
+                    html.Button("Quitar todos", id="btn-clear-metric-filters", n_clicks=0),
+                ],
+            ),
+            html.Div(id="metric-filter-message", className="filter-message"),
+            html.Div(id="metric-filter-list", className="metric-filter-list"),
 
             html.Hr(),
             html.H4("Filtrado"),

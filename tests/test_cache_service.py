@@ -2,7 +2,14 @@ import numpy as np
 import pytest
 
 from cache.backend import SqliteHdf5CacheBackend
-from cache.service import get_or_compute_group_intrinsic, get_or_compute_group_reduction, get_or_compute_puntual
+from cache.service import (
+    _GROUP_MEMO,
+    _GROUP_MEMO_MAX_ENTRIES,
+    clear_group_memo,
+    get_or_compute_group_intrinsic,
+    get_or_compute_group_reduction,
+    get_or_compute_puntual,
+)
 from core.models import SensorConfig, SignalBlock
 from metrics.registry import discover_metrics
 
@@ -288,3 +295,70 @@ def test_partially_filtering_mask_still_bypasses_cache(cache, sensor_config):
         cache, block, sensor_config, "ds_partial", "vmax", "by_count", 3, reducer="median", active_mask=partial_mask
     )
     assert cache.stats()["total_entries"] == 0
+
+
+def test_group_reduction_memo_hit_with_filter_version(cache, sensor_config):
+    clear_group_memo()
+    block = _block([[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3]], [0.0, 1.0, 2.0])
+    partial_mask = np.array([True, False, True])
+
+    # First call with filter_version=1: computes and caches in memo
+    t1, v1, p1 = get_or_compute_group_reduction(
+        cache, block, sensor_config, "ds_memo", "vmax", "by_count", 2, reducer="median",
+        active_mask=partial_mask, filter_version=1,
+    )
+    assert len(_GROUP_MEMO) == 1
+    assert cache.stats()["total_entries"] == 0
+
+    # Second call with same filter_version=1: serves from memo
+    t2, v2, p2 = get_or_compute_group_reduction(
+        cache, block, sensor_config, "ds_memo", "vmax", "by_count", 2, reducer="median",
+        active_mask=partial_mask, filter_version=1,
+    )
+    np.testing.assert_array_equal(t1, t2)
+    np.testing.assert_array_equal(v1, v2)
+    assert len(_GROUP_MEMO) == 1
+
+    # Third call with new filter_version=2: recomputes and adds to memo
+    t3, v3, p3 = get_or_compute_group_reduction(
+        cache, block, sensor_config, "ds_memo", "vmax", "by_count", 2, reducer="median",
+        active_mask=partial_mask, filter_version=2,
+    )
+    assert len(_GROUP_MEMO) == 2
+    assert cache.stats()["total_entries"] == 0
+
+
+def test_group_intrinsic_memo_hit_with_filter_version(cache, sensor_config):
+    clear_group_memo()
+    block = _block([[1, 1, 1, 1]] * 5, [0.0, 1.0, 2.0, 3.0, 4.0])
+    partial_mask = np.array([True, True, False, True, True])
+
+    t1, v1, p1 = get_or_compute_group_intrinsic(
+        cache, block, sensor_config, "ds_memo_int", "tasa_pulsos", "by_time", 60.0,
+        active_mask=partial_mask, filter_version=10,
+    )
+    assert len(_GROUP_MEMO) == 1
+    assert cache.stats()["total_entries"] == 0
+
+    t2, v2, p2 = get_or_compute_group_intrinsic(
+        cache, block, sensor_config, "ds_memo_int", "tasa_pulsos", "by_time", 60.0,
+        active_mask=partial_mask, filter_version=10,
+    )
+    np.testing.assert_array_equal(t1, t2)
+    np.testing.assert_array_equal(v1, v2)
+    assert len(_GROUP_MEMO) == 1
+
+
+def test_group_memo_lru_capacity_eviction(cache, sensor_config):
+    clear_group_memo()
+    block = _block([[1, 1, 1, 1], [2, 2, 2, 2]], [0.0, 1.0])
+    partial_mask = np.array([True, False])
+
+    # Insert more than _GROUP_MEMO_MAX_ENTRIES (128) entries
+    for f_ver in range(1, _GROUP_MEMO_MAX_ENTRIES + 10):
+        get_or_compute_group_reduction(
+            cache, block, sensor_config, "ds_evict", "vmax", "by_count", 1, reducer="median",
+            active_mask=partial_mask, filter_version=f_ver,
+        )
+
+    assert len(_GROUP_MEMO) == _GROUP_MEMO_MAX_ENTRIES

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -64,30 +65,71 @@ def warm_cache(
     dataset_id: str,
     specs: list[WarmupSpec],
     cancelled: threading.Event | None = None,
+    max_workers: int = 2,
 ) -> list[str]:
-    """Ejecuta el precalentamiento síncronamente sobre ``cache``. Retorna los
-    ``metric_id`` efectivamente calculados/verificados (en orden).
+    """Ejecuta el precalentamiento sobre ``cache`` utilizando ``ThreadPoolExecutor(max_workers=max_workers)``.
+    Retorna los ``metric_id`` efectivamente calculados/verificados (en orden de specs).
 
-    ``cancelled``: si se señala, el bucle corta **entre** especificaciones y retorna lo
-    que alcanzó a calcular. La granularidad es deliberadamente la spec, no algo más fino:
-    una métrica puntual es una sola llamada vectorizada de numpy sobre la matriz entera y
-    no hay dónde interrumpirla. Lo que importa es que el corte ocurra antes de empezar la
-    siguiente, que es donde está el trabajo caro (medido: `kurtosis` sobre las 20 574
-    señales AE de med_5_ago_3 tarda ~26 s ella sola).
+    ``cancelled``: si se señala, el procesamiento corta entre especificaciones y retorna lo
+    que alcanzó a calcular.
     """
-    done: list[str] = []
-    for spec in specs:
+    if cancelled is not None and cancelled.is_set():
+        _logger.info(
+            "etapa=cache.warmup evento=cancelado_inicio dataset_id=%s total_specs=%d",
+            dataset_id, len(specs),
+        )
+        return []
+
+    valid_specs = [(idx, spec) for idx, spec in enumerate(specs) if spec.sensor in blocks]
+    if not valid_specs:
+        return []
+
+    if max_workers <= 1 or len(valid_specs) <= 1:
+        done: list[str] = []
+        for _, spec in valid_specs:
+            if cancelled is not None and cancelled.is_set():
+                _logger.info(
+                    "etapa=cache.warmup evento=cancelado dataset_id=%s calculadas=%d de=%d",
+                    dataset_id, len(done), len(specs),
+                )
+                break
+            block = blocks[spec.sensor]
+            cfg = sensor_configs[spec.sensor]
+            try:
+                if spec.regimen == "puntual":
+                    get_or_compute_puntual(cache, block, cfg, dataset_id, spec.metric_id, params=spec.params)
+                elif spec.regimen == "grupo_reduccion":
+                    assert spec.grouping_mode is not None and spec.grouping_value is not None
+                    get_or_compute_group_reduction(
+                        cache, block, cfg, dataset_id, spec.metric_id, spec.grouping_mode, spec.grouping_value,
+                        reducer=spec.reducer, percentile_q=spec.percentile_q, params=spec.params,
+                    )
+                elif spec.regimen == "grupo_intrinseca":
+                    assert spec.grouping_mode is not None and spec.grouping_value is not None
+                    get_or_compute_group_intrinsic(
+                        cache, block, cfg, dataset_id, spec.metric_id, spec.grouping_mode, spec.grouping_value,
+                        params=spec.params,
+                    )
+                else:
+                    raise ValueError(f"Régimen de warmup desconocido: '{spec.regimen}'")
+            except Exception:
+                _logger.exception(
+                    "etapa=cache.warmup error=fallo_metrica sensor=%s metric_id=%s regimen=%s",
+                    spec.sensor, spec.metric_id, spec.regimen,
+                )
+                continue
+            done.append(spec.metric_id)
+        return done
+
+    results: list[tuple[int, str]] = []
+    results_lock = threading.Lock()
+
+    def _worker(item: tuple[int, WarmupSpec]) -> None:
+        idx, spec = item
         if cancelled is not None and cancelled.is_set():
-            _logger.info(
-                "etapa=cache.warmup evento=cancelado dataset_id=%s calculadas=%d de=%d",
-                dataset_id, len(done), len(specs),
-            )
-            break
-        if spec.sensor not in blocks:
-            continue
+            return
         block = blocks[spec.sensor]
         cfg = sensor_configs[spec.sensor]
-
         try:
             if spec.regimen == "puntual":
                 get_or_compute_puntual(cache, block, cfg, dataset_id, spec.metric_id, params=spec.params)
@@ -106,15 +148,28 @@ def warm_cache(
             else:
                 raise ValueError(f"Régimen de warmup desconocido: '{spec.regimen}'")
         except Exception:
-            # Una métrica que falla (p. ej. MemoryError en un dataset grande) no debe
-            # tumbar el resto del precalentamiento -- ni las demás métricas del mismo
-            # sensor, ni las del otro sensor que vengan después en `specs`.
             _logger.exception(
                 "etapa=cache.warmup error=fallo_metrica sensor=%s metric_id=%s regimen=%s",
                 spec.sensor, spec.metric_id, spec.regimen,
             )
-            continue
-        done.append(spec.metric_id)
+            return
+
+        with results_lock:
+            results.append((idx, spec.metric_id))
+
+    workers_count = min(max_workers, len(valid_specs))
+    with ThreadPoolExecutor(max_workers=workers_count) as executor:
+        futures = [executor.submit(_worker, item) for item in valid_specs]
+        for f in futures:
+            f.result()
+
+    results.sort(key=lambda x: x[0])
+    done = [metric_id for _, metric_id in results]
+    if cancelled is not None and cancelled.is_set():
+        _logger.info(
+            "etapa=cache.warmup evento=cancelado dataset_id=%s calculadas=%d de=%d",
+            dataset_id, len(done), len(specs),
+        )
     return done
 
 

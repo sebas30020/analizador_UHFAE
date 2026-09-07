@@ -11,6 +11,10 @@ se aplica como máscara sobre estos resultados ya cacheados, nunca dispara un re
 """
 from __future__ import annotations
 
+from collections import OrderedDict
+import threading
+from typing import Any
+
 import numpy as np
 
 from cache.backend import CacheBackend
@@ -21,6 +25,17 @@ from core.normalization import NORMALIZATION_VERSION
 from metrics.engine import compute_group_intrinsic, compute_group_reduction, compute_puntual
 from metrics.registry import get_metric
 from utils.profiling import stage
+
+_GROUP_MEMO_MAX_ENTRIES = 128
+_GROUP_MEMO_LOCK = threading.Lock()
+_GROUP_MEMO: OrderedDict[tuple[str, int], tuple[np.ndarray, np.ndarray, np.ndarray]] = OrderedDict()
+
+
+def clear_group_memo() -> None:
+    """Limpia el memo LRU en memoria de régimen de grupo."""
+    with _GROUP_MEMO_LOCK:
+        _GROUP_MEMO.clear()
+
 
 
 def _sin_exclusiones(active_mask: np.ndarray | None) -> np.ndarray | None:
@@ -92,25 +107,19 @@ def get_or_compute_group_reduction(
     percentile_q: float = 75.0,
     params: dict | None = None,
     active_mask: np.ndarray | None = None,
+    filter_version: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Régimen grupo vía reducción genérica: ``(center_timestamps, values, is_partial)``.
 
     ``active_mask`` (Fase 6, PROMPT §7): a diferencia del régimen puntual, los
     agregados de grupo SÍ cambian si se excluye una señal (§7.2, "reconciliación") --
-    con máscara activa que excluye al menos una señal, esta función bypasea el caché por
-    completo (nunca lee ni escribe) y recalcula directamente vía ``metrics.engine``.
+    con máscara activa que excluye al menos una señal, esta función bypasea el caché de disco
+    por completo (nunca lee ni escribe en SQLite/HDF5) y recalcula vía ``metrics.engine``,
+    o sirve desde el memo LRU en RAM si coincide ``(canonical_cache_key, filter_version)`` (B3).
     """
     active_mask = _sin_exclusiones(active_mask)
     definition = get_metric(metric_id)
     with stage("cache.grupo_reduccion", sensor=sensor_config.name, metrica=metric_id) as ctx:
-        if active_mask is not None:
-            ctx["cache"] = "bypass"
-            groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
-            return compute_group_reduction(
-                block, sensor_config, metric_id, groups, reducer=reducer, percentile_q=percentile_q,
-                params=params, extra_mask=active_mask,
-            )
-
         grouping_spec = build_grouping_spec(grouping_mode, grouping_value, reducer=reducer, percentile_q=percentile_q)
         key, canonical_json = build_cache_key_with_json(
             dataset_id=dataset_id,
@@ -121,6 +130,32 @@ def get_or_compute_group_reduction(
             metric_params=params,
             grouping=grouping_spec,
         )
+
+        if active_mask is not None:
+            if filter_version is not None:
+                memo_key = (key, filter_version)
+                with _GROUP_MEMO_LOCK:
+                    if memo_key in _GROUP_MEMO:
+                        _GROUP_MEMO.move_to_end(memo_key)
+                        ctx["cache"] = "hit"
+                        t, v, p = _GROUP_MEMO[memo_key]
+                        return t.copy(), v.copy(), p.copy()
+
+            ctx["cache"] = "bypass"
+            groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
+            t, v, p = compute_group_reduction(
+                block, sensor_config, metric_id, groups, reducer=reducer, percentile_q=percentile_q,
+                params=params, extra_mask=active_mask,
+            )
+
+            if filter_version is not None:
+                memo_key = (key, filter_version)
+                with _GROUP_MEMO_LOCK:
+                    _GROUP_MEMO[memo_key] = (t, v, p)
+                    if len(_GROUP_MEMO) > _GROUP_MEMO_MAX_ENTRIES:
+                        _GROUP_MEMO.popitem(last=False)
+
+            return t, v, p
 
         hit = cache.get(key)
         ctx["cache"] = "hit" if hit is not None else "miss"
@@ -146,20 +181,16 @@ def get_or_compute_group_intrinsic(
     grouping_value: float,
     params: dict | None = None,
     active_mask: np.ndarray | None = None,
+    filter_version: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Régimen grupo intrínseco (tasa_pulsos, tasa_energia, tasa_rafagas).
 
     ``active_mask`` (Fase 6, PROMPT §7): ver :func:`get_or_compute_group_reduction` --
-    misma estrategia de bypass total de caché cuando hay filtro activo.
+    misma estrategia de bypass total de caché de disco y memo LRU en RAM (B3) cuando hay filtro activo.
     """
     active_mask = _sin_exclusiones(active_mask)
     definition = get_metric(metric_id)
     with stage("cache.grupo_intrinseca", sensor=sensor_config.name, metrica=metric_id) as ctx:
-        if active_mask is not None:
-            ctx["cache"] = "bypass"
-            groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
-            return compute_group_intrinsic(block, sensor_config, metric_id, groups, params=params, extra_mask=active_mask)
-
         grouping_spec = build_grouping_spec(grouping_mode, grouping_value)  # sin reducer: no aplica
         key, canonical_json = build_cache_key_with_json(
             dataset_id=dataset_id,
@@ -170,6 +201,29 @@ def get_or_compute_group_intrinsic(
             metric_params=params,
             grouping=grouping_spec,
         )
+
+        if active_mask is not None:
+            if filter_version is not None:
+                memo_key = (key, filter_version)
+                with _GROUP_MEMO_LOCK:
+                    if memo_key in _GROUP_MEMO:
+                        _GROUP_MEMO.move_to_end(memo_key)
+                        ctx["cache"] = "hit"
+                        t, v, p = _GROUP_MEMO[memo_key]
+                        return t.copy(), v.copy(), p.copy()
+
+            ctx["cache"] = "bypass"
+            groups = resolve_groups(block.timestamps, mode=grouping_mode, value=grouping_value)
+            t, v, p = compute_group_intrinsic(block, sensor_config, metric_id, groups, params=params, extra_mask=active_mask)
+
+            if filter_version is not None:
+                memo_key = (key, filter_version)
+                with _GROUP_MEMO_LOCK:
+                    _GROUP_MEMO[memo_key] = (t, v, p)
+                    if len(_GROUP_MEMO) > _GROUP_MEMO_MAX_ENTRIES:
+                        _GROUP_MEMO.popitem(last=False)
+
+            return t, v, p
 
         hit = cache.get(key)
         ctx["cache"] = "hit" if hit is not None else "miss"

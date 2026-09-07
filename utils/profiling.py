@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -43,6 +44,27 @@ import yaml
 
 LOGGER_NAME = "analizador.profiling"
 ENV_VAR = "ANALIZADOR_PROFILING"
+
+# Etapas estándar de profiling
+STAGE_INGESTA_SENSOR = "ingesta.sensor"
+STAGE_INGESTA_EXPERIMENTO = "ingesta.experimento"
+STAGE_CARGA_DATASET = "carga.dataset"
+STAGE_FILTRO_METRICAS = "filtro.metricas"
+STAGE_JOB_PREFIX = "job."
+STAGE_CACHE_PUNTUAL = "cache.puntual"
+STAGE_CACHE_GRUPO_REDUCCION = "cache.grupo_reduccion"
+STAGE_CACHE_GRUPO_INTRINSECA = "cache.grupo_intrinseca"
+STAGE_METRICAS_ESPECTRO = "metricas.espectro"
+STAGE_RENDER_GRAFICA1 = "render.grafica1"
+STAGE_RENDER_GRAFICA2 = "render.grafica2"
+STAGE_RENDER_GRAFICA3 = "render.grafica3"
+STAGE_EXPORT_FILTRADO = "export.filtrado"
+
+
+def stage_job(kind: str) -> str:
+    """Retorna el nombre canónico de etapa para un tipo de trabajo en segundo plano."""
+    return f"{STAGE_JOB_PREFIX}{kind}"
+
 
 _logger = logging.getLogger(LOGGER_NAME)
 
@@ -141,19 +163,108 @@ def configure_from_config(config_path: str | Path, force: bool | None = None) ->
     return is_enabled()
 
 
+# --- Medición de memoria nativa del proceso ----------------------------------
+
+
+def _measure_windows_memory() -> dict[str, int]:
+    import ctypes
+    import ctypes.wintypes
+
+    class _PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+        _fields_ = [
+            ("cb", ctypes.wintypes.DWORD),
+            ("PageFaultCount", ctypes.wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+            ("PrivateUsage", ctypes.c_size_t),
+        ]
+
+    k32 = ctypes.windll.kernel32
+    k32.GetCurrentProcess.restype = ctypes.wintypes.HANDLE
+    k32.K32GetProcessMemoryInfo.argtypes = [
+        ctypes.wintypes.HANDLE,
+        ctypes.POINTER(_PROCESS_MEMORY_COUNTERS_EX),
+        ctypes.wintypes.DWORD,
+    ]
+    k32.K32GetProcessMemoryInfo.restype = ctypes.wintypes.BOOL
+
+    counters = _PROCESS_MEMORY_COUNTERS_EX()
+    counters.cb = ctypes.sizeof(_PROCESS_MEMORY_COUNTERS_EX)
+    success = k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(counters), counters.cb)
+    if bool(success):
+        return {
+            "rss_bytes": int(counters.WorkingSetSize),
+            "peak_rss_bytes": int(counters.PeakWorkingSetSize),
+        }
+    return {"rss_bytes": 0, "peak_rss_bytes": 0}
+
+
+def measure_process_memory() -> dict[str, int]:
+    """Mide la memoria residente (RSS) actual y el pico histórico del proceso en bytes.
+
+    En Windows utiliza la API Win32 ``kernel32.K32GetProcessMemoryInfo`` directamente
+    vía ctypes (sin dependencias externas como psutil). En sistemas POSIX utiliza
+    ``resource.getrusage``.
+    """
+    if os.name == "nt":
+        try:
+            return _measure_windows_memory()
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("Error midiendo memoria en Windows: %s", exc)
+            return {"rss_bytes": 0, "peak_rss_bytes": 0}
+    else:
+        try:
+            import resource  # type: ignore[import-not-found,unused-ignore]
+
+            getrusage = getattr(resource, "getrusage", None)
+            rusage_self = getattr(resource, "RUSAGE_SELF", 0)
+            if getrusage is not None:
+                usage = getrusage(rusage_self)
+                scale = 1024 if sys.platform.startswith("linux") else 1
+                peak = int(usage.ru_maxrss * scale)
+                return {"rss_bytes": peak, "peak_rss_bytes": peak}
+            return {"rss_bytes": 0, "peak_rss_bytes": 0}
+        except Exception:
+            return {"rss_bytes": 0, "peak_rss_bytes": 0}
+
+
+def record_timing(
+    stage: str,
+    duration_s: float,
+    metadata: dict[str, Any] | None = None,
+) -> StageRecord:
+    """Registra explícitamente una etapa medida con su duración y metadatos opcionales."""
+    fields = dict(metadata or {})
+    record = StageRecord(name=stage, duration_s=duration_s, fields=fields)
+    if is_enabled():
+        _COLLECTOR.add(record)
+        _logger.info(record.format_line())
+    return record
+
+
 @contextmanager
-def stage(name: str, **fields: Any) -> Iterator[dict[str, Any]]:
+def stage(name: str, *, track_memory: bool = False, **fields: Any) -> Iterator[dict[str, Any]]:
     """Mide el bloque y lo registra como etapa ``name``.
 
     Cede el diccionario de campos, así el cuerpo puede añadir metadatos que solo se
     conocen al terminar (``ctx["n_grupos"] = len(groups)``). Si el bloque lanza una
     excepción, la etapa igual se registra, con ``error=<Tipo>`` -- una etapa que falla a
     los 30 s es justo la que hay que ver en el log.
+
+    Si ``track_memory=True``, mide además la memoria residente (RSS) inicial y final,
+    añadiendo ``rss_bytes``, ``peak_rss_bytes`` y ``rss_delta_bytes`` a los campos.
     """
     if not is_enabled():
         yield fields
         return
 
+    mem_start = measure_process_memory() if track_memory else None
     started = time.perf_counter()
     try:
         yield fields
@@ -161,7 +272,13 @@ def stage(name: str, **fields: Any) -> Iterator[dict[str, Any]]:
         fields["error"] = type(exc).__name__
         raise
     finally:
-        record = StageRecord(name=name, duration_s=time.perf_counter() - started, fields=dict(fields))
+        duration = time.perf_counter() - started
+        if track_memory and mem_start is not None:
+            mem_end = measure_process_memory()
+            fields["rss_bytes"] = mem_end["rss_bytes"]
+            fields["peak_rss_bytes"] = mem_end["peak_rss_bytes"]
+            fields["rss_delta_bytes"] = mem_end["rss_bytes"] - mem_start["rss_bytes"]
+        record = StageRecord(name=name, duration_s=duration, fields=dict(fields))
         _COLLECTOR.add(record)
         _logger.info(record.format_line())
 
@@ -169,13 +286,13 @@ def stage(name: str, **fields: Any) -> Iterator[dict[str, Any]]:
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def profiled(name: str, **fields: Any) -> Callable[[F], F]:
+def profiled(name: str, *, track_memory: bool = False, **fields: Any) -> Callable[[F], F]:
     """Versión decorador de :func:`stage`, para cuando la función entera es la etapa."""
 
     def decorator(fn: F) -> F:
         @wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            with stage(name, **fields):
+            with stage(name, track_memory=track_memory, **fields):
                 return fn(*args, **kwargs)
 
         return wrapper  # type: ignore[return-value]

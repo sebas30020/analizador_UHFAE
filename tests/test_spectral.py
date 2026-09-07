@@ -35,3 +35,39 @@ def test_vectorized_matches_per_row_loop():
     for i in range(4):
         single = compute_spectrum(matrix[i][np.newaxis, :], fs_hz=fs, freq_limit_hz=fs / 2)
         assert np.allclose(batched.mag2[i], single.mag2[0])
+
+
+def test_spectral_truncation_exact_mathematical_equivalence():
+    import scipy.fft as sfft
+
+    fs = 20_000.0
+    n = 1024
+    rng = np.random.default_rng(42)
+    matrix = rng.normal(size=(5, n))
+    freq_limit = 3500.0
+
+    result = compute_spectrum(matrix, fs_hz=fs, freq_limit_hz=freq_limit)
+
+    # Reference calculation using old abs() ** 2 and full mask
+    full_fft = sfft.rfft(matrix, axis=-1)
+    full_mag2 = np.abs(full_fft) ** 2
+    full_freqs = sfft.rfftfreq(n, d=1.0 / fs)
+    mask = full_freqs <= freq_limit
+
+    np.testing.assert_array_equal(result.freqs_hz, full_freqs[mask])
+    np.testing.assert_allclose(result.mag2, full_mag2[..., mask], rtol=1e-12, atol=1e-12)
+
+
+def test_spectral_truncation_edge_cases():
+    fs = 10_000.0
+    n = 200
+    signal = np.ones((2, n))
+
+    # freq_limit_hz >= Nyquist returns all frequencies
+    res_all = compute_spectrum(signal, fs_hz=fs, freq_limit_hz=fs)
+    assert res_all.freqs_hz.shape[0] == n // 2 + 1
+
+    # freq_limit_hz < 0 returns empty frequencies
+    res_empty = compute_spectrum(signal, fs_hz=fs, freq_limit_hz=-1.0)
+    assert res_empty.freqs_hz.shape[0] == 0
+    assert res_empty.mag2.shape == (2, 0)

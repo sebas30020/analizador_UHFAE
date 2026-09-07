@@ -10,11 +10,17 @@ así que comparten el mismo color "informativo".
 """
 from __future__ import annotations
 
+import numpy as np
 import plotly.graph_objects as go
 
 POINT_COLOR = "#4A7BB0"
 HIGHLIGHT_COLOR = "#E8871E"
 ANNOTATION_COLOR = "#7A7A7A"
+
+
+def sanitize_map_customdata(signal_indices: np.ndarray) -> np.ndarray:
+    """Convierte los índices de señal a int32 para reducir a la mitad el buffer de transporte."""
+    return signal_indices.astype(np.int32, copy=False)
 
 # Disposición de trazas, idéntica en #4 y #5 y **contractual**: la traza 0 son los puntos
 # (una señal cada uno, alineados con ``MapDataset.signal_indices``) y la traza 1 es el

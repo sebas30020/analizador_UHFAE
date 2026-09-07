@@ -56,20 +56,25 @@ def resolve_groups_by_time(timestamps: np.ndarray, delta_t: float, t_start: floa
     t_max = timestamps[-1]
 
     bin_idx = np.floor((timestamps - t_start) / delta_t).astype(np.int64)
-    unique_bins = np.unique(bin_idx)
+    unique_bins, counts = np.unique(bin_idx, return_counts=True)
+
+    # Dado que timestamps es monótono no decreciente, bin_idx es monótono no decreciente.
+    # Los límites de cada grupo se obtienen en O(N) acumulando counts sin máscaras booleanas.
+    cum_counts = np.cumsum(counts)
+    start_indices = np.empty(len(unique_bins), dtype=np.int64)
+    start_indices[0] = 0
+    start_indices[1:] = cum_counts[:-1]
 
     groups: list[Group] = []
-    for g_index, b in enumerate(unique_bins):
-        mask = bin_idx == b
-        indices = np.where(mask)[0]
-        start_idx, end_idx = int(indices[0]), int(indices[-1]) + 1
+    for g_index, (b, start_idx, count) in enumerate(zip(unique_bins, start_indices, counts)):
+        end_idx = int(start_idx + count)
         a_w = t_start + b * delta_t
         window_end = a_w + delta_t
         is_partial = window_end > t_max
         groups.append(
             Group(
                 index=g_index,
-                start_idx=start_idx,
+                start_idx=int(start_idx),
                 end_idx=end_idx,
                 T_w=float(delta_t),
                 center_timestamp=float(a_w + delta_t / 2.0),

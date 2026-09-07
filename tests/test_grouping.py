@@ -83,3 +83,37 @@ def test_resolve_groups_dispatches_by_mode():
 def test_empty_timestamps_returns_no_groups():
     assert resolve_groups_by_time(np.array([]), delta_t=10.0) == []
     assert resolve_groups_by_count(np.array([]), k=5) == []
+
+
+def test_by_time_o_n_optimization_equivalence():
+    rng = np.random.default_rng(123)
+    n = 10_000
+    # Strictly non-decreasing timestamps with irregular intervals and some empty gaps
+    deltas = rng.exponential(scale=2.0, size=n)
+    deltas[1000:1050] += 500.0  # insert big gap (empty windows)
+    timestamps = np.cumsum(deltas)
+    delta_t = 60.0
+
+    groups = resolve_groups_by_time(timestamps, delta_t=delta_t)
+
+    # Reference computation using direct boolean masking
+    t_start = timestamps[0]
+    t_max = timestamps[-1]
+    bin_idx = np.floor((timestamps - t_start) / delta_t).astype(np.int64)
+    unique_bins = np.unique(bin_idx)
+
+    assert len(groups) == len(unique_bins)
+    for g_index, b in enumerate(unique_bins):
+        mask = bin_idx == b
+        indices = np.where(mask)[0]
+        ref_start, ref_end = int(indices[0]), int(indices[-1]) + 1
+        a_w = t_start + b * delta_t
+        ref_partial = bool((a_w + delta_t) > t_max)
+
+        g = groups[g_index]
+        assert g.index == g_index
+        assert g.start_idx == ref_start
+        assert g.end_idx == ref_end
+        assert g.T_w == delta_t
+        assert g.center_timestamp == float(a_w + delta_t / 2.0)
+        assert g.is_partial == ref_partial

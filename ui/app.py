@@ -73,8 +73,19 @@ def create_app() -> Dash:
     if configure_from_config(DEFAULT_SENSORS_CONFIG_PATH):
         logging.basicConfig(format="%(asctime)s %(name)s %(message)s", level=logging.INFO)
         logging.getLogger("analizador.profiling").info("etapa=profiling.activado")
+    compress_enabled = False
+    try:
+        import flask_compress  # noqa: F401
+        compress_enabled = True
+    except ImportError:
+        pass
 
-    app = Dash(__name__, title="Analizador UHF/AE", suppress_callback_exceptions=True)
+    app = Dash(
+        __name__,
+        title="Analizador UHF/AE",
+        suppress_callback_exceptions=True,
+        compress=compress_enabled,
+    )
     app.index_string = app.index_string.replace("{%css%}", f"{{%css%}}<style>{_INLINE_CSS}</style>")
     app.layout = html.Div([dcc.Location(id="url", refresh=False), html.Div(id="page-content")])
 

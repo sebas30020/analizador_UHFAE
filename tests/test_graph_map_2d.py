@@ -128,3 +128,12 @@ def test_empty_map_figure_shows_informative_message_not_error():
 def test_empty_map_figure_accepts_custom_message():
     fig = build_empty_map_figure("mensaje personalizado")
     assert fig.layout.annotations[0].text == "mensaje personalizado"
+
+
+def test_map_2d_encodes_customdata_int32_and_coords_float32():
+    dataset = _dataset([1.0, 2.0, 3.0], [4.0, 5.0, 6.0], signal_indices=[100, 101, 102])
+    fig = build_map_2d_figure(dataset)
+    points_trace = fig.data[0]
+    assert np.asarray(points_trace.customdata).dtype == np.int32
+    assert np.asarray(points_trace.x).dtype == np.float32
+    assert np.asarray(points_trace.y).dtype == np.float32

@@ -8,11 +8,16 @@ import threading
 from datetime import datetime
 from functools import partial
 from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 import plotly.graph_objects as go
-from dash import ALL, Dash, Input, Output, Patch, State, ctx, dcc, html
+from dash import ALL, Dash, Input, Output, Patch, State, ctx, dcc, html, no_update
 from dash.exceptions import PreventUpdate
+
+from ui.callbacks.job_callbacks import register_job_callbacks
+from ui.jobs import get_job_service
+from ui.layout import mount_job_status_bar
 
 from cache.service import get_or_compute_group_intrinsic, get_or_compute_group_reduction, get_or_compute_puntual
 from core.grouping import resolve_groups
@@ -49,6 +54,8 @@ from ui.callbacks.helpers import (
     resolve_reference_line_display,
     resolve_sensor_availability_notice,
 )
+from core.metric_filters import MetricCondition, normalize_threshold
+from ui.components.control_panel import build_metric_filter_badges
 from ui.components.event_lines import build_event_line_shapes
 from ui.components.graph_map_2d import build_map_2d_figure
 from ui.components.graph_map_3d import build_map_3d_figure
@@ -153,8 +160,16 @@ def _run_export(state: AppState, snapshot: ExportSnapshot, destination: str) -> 
 
 
 def _launch_export_thread(state: AppState, snapshot: ExportSnapshot, destination: str) -> None:
-    thread = threading.Thread(target=_run_export, args=(state, snapshot, destination), daemon=True, name="filtered-export")
-    thread.start()
+    job_service = get_job_service()
+
+    def _export_job(cancel_token: threading.Event, progress_cb: Callable[[float, str], None]) -> None:
+        _run_export(state, snapshot, destination)
+
+    job_service.submit(
+        "export",
+        _export_job,
+        label=f"Exportando {Path(destination).name}",
+    )
 
 
 def _run_merge(state: AppState, source1: str, source2: str, destination: str, partition: ExportPartition) -> None:
@@ -176,13 +191,16 @@ def _run_merge(state: AppState, source1: str, source2: str, destination: str, pa
 def _launch_merge_thread(
     state: AppState, source1: str, source2: str, destination: str, partition: ExportPartition
 ) -> None:
-    thread = threading.Thread(
-        target=_run_merge,
-        args=(state, source1, source2, destination, partition),
-        daemon=True,
-        name="dataset-merge",
+    job_service = get_job_service()
+
+    def _merge_job(cancel_token: threading.Event, progress_cb: Callable[[float, str], None]) -> None:
+        _run_merge(state, source1, source2, destination, partition)
+
+    job_service.submit(
+        "merge",
+        _merge_job,
+        label=f"Fusionando {Path(destination).name}",
     )
-    thread.start()
 
 
 # --- Mapas de separación #4/#5 (archivos_md/prompt-mapas2d3d.md, etapa 3) -----------
@@ -262,6 +280,8 @@ def register_callbacks(app: Dash) -> None:
     ``build_sensor_window_layout`` al construir esa página -- así una sola definición
     de callback sirve a ambas ventanas gemelas sin duplicar lógica (§6.1 del PROMPT).
     """
+    mount_job_status_bar(app.layout)
+    register_job_callbacks(app)
 
     @app.callback(
         Output("db-path-label", "children"),
@@ -276,8 +296,9 @@ def register_callbacks(app: Dash) -> None:
         if not path:
             raise PreventUpdate
         state = get_state()
-        dataset = state.load_dataset(path, partition=partition or "resultantes")
-        return format_db_path_label(dataset.source_path, dataset.partition), (current_version or 0) + 1
+        state.begin_load(path, partition=partition or "resultantes")
+        label = f"{Path(path).name} ({partition or 'resultantes'}) [cargando en segundo plano...]"
+        return label, no_update
 
     @app.callback(
         Output("db-path-label", "children", allow_duplicate=True),
@@ -287,15 +308,7 @@ def register_callbacks(app: Dash) -> None:
         prevent_initial_call=True,
     )
     def _on_change_partition(partition: ExportPartition | None, current_version: int | None):
-        """Cambiar de partición recarga el archivo ya abierto, en vivo.
-
-        Sin esto el selector solo se leía al pulsar "Seleccionar base de datos…", así que
-        moverlo con un archivo ya cargado no hacía absolutamente nada -- el usuario veía
-        las señales de la partición anterior y no había forma de saber por qué. Recargar
-        es lo correcto y no un atajo: dos particiones son conjuntos de señales distintos
-        (``dataset_id`` distinto, ver ``FilteredExportReader.dataset_id``), no una vista
-        filtrada del mismo conjunto, así que no se pueden intercambiar en memoria.
-        """
+        """Cambiar de partición recarga el archivo ya abierto, en vivo."""
         state = get_state()
         dataset = state.dataset
         if dataset is None:
@@ -303,8 +316,9 @@ def register_callbacks(app: Dash) -> None:
         target = resolve_partition_change(dataset.partition, partition)
         if target is None:
             raise PreventUpdate
-        reloaded = state.load_dataset(dataset.source_path, partition=target)
-        return format_db_path_label(reloaded.source_path, reloaded.partition), (current_version or 0) + 1
+        state.begin_load(dataset.source_path, partition=target)
+        label = f"{dataset.source_path.name} ({target}) [recargando en segundo plano...]"
+        return label, no_update
 
     # --- Exportación de datos filtrados (Fase 6) -------------------------------------
     #
@@ -646,14 +660,68 @@ def register_callbacks(app: Dash) -> None:
         raise PreventUpdate
 
     @app.callback(
+        Output("filter-version", "data", allow_duplicate=True),
+        Output("metric-filter-message", "children"),
+        Input("btn-add-metric-filter", "n_clicks"),
+        Input("btn-clear-metric-filters", "n_clicks"),
+        Input({"type": "btn-remove-metric-filter", "index": ALL}, "n_clicks"),
+        State("metric-filter-metric", "value"),
+        State("metric-filter-operator", "value"),
+        State("metric-filter-value", "value"),
+        State("page-sensor", "data"),
+        prevent_initial_call=True,
+    )
+    def _on_metric_filter_action(
+        n_add, n_clear, n_remove_all, metric_id, operator, raw_threshold, sensor
+    ):
+        state = get_state()
+        triggered = ctx.triggered_id
+        if isinstance(triggered, dict) and triggered.get("type") == "btn-remove-metric-filter":
+            # Guarda contra disparo espurio de ALL al montar/repintar la lista
+            if not ctx.triggered or not ctx.triggered[0].get("value"):
+                raise PreventUpdate
+            key_to_remove = triggered["index"]
+            res = state.remove_metric_filter(sensor, key_to_remove)
+            if res.error:
+                return no_update, res.error
+            return res.filter_version, res.contradiction_warning or ""
+
+        if triggered == "btn-clear-metric-filters":
+            if not n_clear:
+                raise PreventUpdate
+            res = state.clear_metric_filters(sensor)
+            return res.filter_version, ""
+
+        if triggered == "btn-add-metric-filter":
+            if not n_add:
+                raise PreventUpdate
+            if not metric_id:
+                return no_update, "Seleccione una métrica para filtrar."
+            thresh = normalize_threshold(raw_threshold)
+            if thresh is None:
+                return no_update, "Ingrese un umbral numérico válido."
+            op = operator if operator in (">=", "<=") else ">="
+            cond = MetricCondition(metric_name=metric_id, operator=op, threshold=thresh)
+            res = state.add_metric_filter(sensor, cond)
+            if res.error:
+                return no_update, f"Error: {res.error}"
+            return res.filter_version, res.contradiction_warning or ""
+
+        raise PreventUpdate
+
+    @app.callback(
         Output("filter-status", "children"),
+        Output("metric-filter-list", "children"),
         Input("filter-version", "data"),
         Input("dataset-version", "data"),
         State("page-sensor", "data"),
     )
     def _on_refresh_filter_status(filter_version, dataset_version, sensor):
         state = get_state()
-        return format_filter_status(*state.get_filter_counts(sensor))
+        counts_text = format_filter_status(*state.get_filter_counts(sensor))
+        conditions = state.get_metric_filters(sensor)
+        badges = build_metric_filter_badges(conditions)
+        return counts_text, badges
 
     @app.callback(
         Output("sensor-availability-notice", "children"),
@@ -709,11 +777,11 @@ def register_callbacks(app: Dash) -> None:
         Input("reference-line-t", "value"),
         State("event-shapes", "data"),
         State({"type": "graph-metric", "index": ALL}, "id"),
-        State("graph-timeseries", "figure"),
+        State("page-sensor", "data"),
         prevent_initial_call=True,
     )
     def _on_refresh_metric_decorations(
-        show_events_value, show_reference_value, reference_t, event_shapes, metric_ids, ts_fig=None
+        show_events_value, show_reference_value, reference_t, event_shapes, metric_ids, sensor_or_fig=None
     ):
         # Dueño único de layout.shapes / layout.annotations en las gráficas #3: eventos
         # (verticales) y línea de referencia (horizontal, archivos_md/prompt-linea-
@@ -733,13 +801,42 @@ def register_callbacks(app: Dash) -> None:
         events_visible = _is_checked(show_events_value, "show")
 
         ts_patch = Patch()
-        if ts_fig:
-            data = ts_fig.get("data", []) if isinstance(ts_fig, dict) else getattr(ts_fig, "data", [])
+        event_idx: int | None = None
+        if isinstance(sensor_or_fig, str):
+            # Convención de índice determinista sin transferir la figura (1.0-1.3 MB) por la red
+            state = get_state()
+            dataset = state.dataset
+            if dataset is not None and dataset.events.timestamps.shape[0] > 0:
+                sensor_name = sensor_or_fig
+                has_env = dataset.environmental.timestamps.shape[0] > 0
+                has_envelope = False
+                if sensor_name in dataset.blocks:
+                    block = dataset.blocks[sensor_name]
+                    active_mask = state.get_active_mask(sensor_name)
+                    valid = block.valid_mask & active_mask
+                    has_envelope = bool(valid.any())
+                event_idx = (1 if has_envelope else 0) + (2 if has_env else 0)
+        elif isinstance(sensor_or_fig, (int, np.integer)):
+            event_idx = int(sensor_or_fig)
+        elif sensor_or_fig is not None and (
+            isinstance(sensor_or_fig, dict) or hasattr(sensor_or_fig, "data")
+        ):
+            # Compatibilidad con tests que inyectan directamente un objeto/dict de figura
+            data = (
+                sensor_or_fig.get("data", [])
+                if isinstance(sensor_or_fig, dict)
+                else getattr(sensor_or_fig, "data", [])
+            )
             for idx, trace in enumerate(data):
-                trace_name = trace.get("name") if isinstance(trace, dict) else getattr(trace, "name", None)
+                trace_name = (
+                    trace.get("name") if isinstance(trace, dict) else getattr(trace, "name", None)
+                )
                 if trace_name == "Eventos":
-                    ts_patch["data"][idx]["visible"] = events_visible
+                    event_idx = idx
                     break
+
+        if event_idx is not None:
+            ts_patch["data"][event_idx]["visible"] = events_visible
 
         registry = get_reference_registry()
         metric_patches = []
@@ -907,6 +1004,7 @@ def register_callbacks(app: Dash) -> None:
             # MemoryError en un dataset grande, ver plan de memoria) subiría a Dash como
             # HTTP 500 y se perderían TAMBIÉN las gráficas que sí se pudieron calcular.
             try:
+                f_ver = int(filter_version) if filter_version is not None else None
                 if regimen == "puntual":
                     timestamps, values = get_or_compute_puntual(
                         state.cache, block, cfg, dataset.dataset_id, metric_id, active_mask=active_mask
@@ -915,12 +1013,14 @@ def register_callbacks(app: Dash) -> None:
                     timestamps, values, is_partial = get_or_compute_group_intrinsic(
                         state.cache, block, cfg, dataset.dataset_id, metric_id, grouping_mode, float(grouping_value),
                         active_mask=active_mask,
+                        filter_version=f_ver,
                     )
                 else:  # grupo_reduccion
                     timestamps, values, is_partial = get_or_compute_group_reduction(
                         state.cache, block, cfg, dataset.dataset_id, metric_id, grouping_mode, float(grouping_value),
                         reducer=reducer or "median", percentile_q=float(percentile_q or 75.0),
                         active_mask=active_mask,
+                        filter_version=f_ver,
                     )
 
                 # Régimen de grupo (intrínseca o reducción): unión directa siempre, más

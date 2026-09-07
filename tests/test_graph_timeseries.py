@@ -6,7 +6,7 @@ bins de píxel: el requisito es ver **todas** las señales, por muchas que sean.
 import numpy as np
 
 from core.models import EnvironmentalSeries, EventSeries, SensorConfig, SignalBlock
-from ui.components.graph_timeseries import SELECTION_ANCHOR_NAME, build_timeseries_figure
+from ui.components.graph_timeseries import EMPTY_ACTIVE_SET_MESSAGE, SELECTION_ANCHOR_NAME, build_timeseries_figure
 from ui.components.sensor_window import build_sensor_window_layout
 
 UHF_CONFIG = SensorConfig(
@@ -301,7 +301,10 @@ def test_timeseries_figure_with_no_active_signals_omits_envelope_trace():
     events = EventSeries(timestamps=np.array([]), event_type=np.array([], dtype=object))
     fig = build_timeseries_figure(UHF_CONFIG, block, env, events, t0, np.zeros(n, dtype=bool))
     assert not any("envolvente" in (tr.name or "") for tr in fig.data)
-    assert len(fig.data) == 2
+    # Temperatura, humedad y traza ancla invisible preservada para modebar lasso
+    assert len(fig.data) == 3
+    assert fig.data[-1].name == SELECTION_ANCHOR_NAME
+    assert any(EMPTY_ACTIVE_SET_MESSAGE in str(ann.text) for ann in fig.layout.annotations)
 
 
 def test_envelope_trace_mode_is_lines_without_markers():

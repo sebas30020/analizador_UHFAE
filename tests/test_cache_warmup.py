@@ -218,3 +218,34 @@ def test_warm_cache_group_metrics_hit_cache_when_queried_with_all_true_mask(tmp_
     assert cache.stats()["total_entries"] == initial_entries
     assert v.shape[0] > 0
     cache.close()
+
+
+def test_warm_cache_parallel_threadpool_execution(tmp_path, sensor_config, block):
+    thread_ids_used = set()
+    lock = threading.Lock()
+
+    import cache.warmup as warmup_module
+    real_puntual = warmup_module.get_or_compute_puntual
+
+    def _tracking_puntual(cache, block, cfg, dataset_id, metric_id, **kwargs):
+        with lock:
+            thread_ids_used.add(threading.get_ident())
+        time.sleep(0.01)  # allow overlap between workers
+        return real_puntual(cache, block, cfg, dataset_id, metric_id, **kwargs)
+
+    cache = SqliteHdf5CacheBackend(tmp_path / "cache")
+    specs = [
+        WarmupSpec(sensor="UHF", metric_id="rms", regimen="puntual"),
+        WarmupSpec(sensor="UHF", metric_id="vpp", regimen="puntual"),
+        WarmupSpec(sensor="UHF", metric_id="vmax", regimen="puntual"),
+        WarmupSpec(sensor="UHF", metric_id="crest_factor", regimen="puntual"),
+    ]
+
+    import unittest.mock as mock
+    with mock.patch("cache.warmup.get_or_compute_puntual", side_effect=_tracking_puntual):
+        done = warm_cache(cache, {"UHF": block}, {"UHF": sensor_config}, "ds1", specs, max_workers=2)
+
+    assert done == [s.metric_id for s in specs]
+    assert len(thread_ids_used) >= 2  # multiple worker threads in ThreadPoolExecutor
+    assert cache.stats()["total_entries"] == len(specs)
+    cache.close()

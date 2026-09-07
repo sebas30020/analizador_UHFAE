@@ -18,15 +18,26 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
+from typing import Any, Callable, Sequence
 
-from cache.backend import SqliteHdf5CacheBackend
-from cache.warmup import default_warmup_specs, start_background_warmup
+from cache.backend import CacheBackend, SqliteHdf5CacheBackend
+from cache.service import get_or_compute_puntual
+from cache.warmup import default_warmup_specs, start_background_warmup, warm_cache
+from core.metric_filters import (
+    MetricCondition,
+    combine_conditions,
+    condition_key,
+    detect_contradictions,
+    evaluate_condition,
+    scatter_to_full,
+)
 from core.models import EnvironmentalSeries, EventSeries, SensorConfig, SensorName, SignalBlock, load_sensor_configs
 from core.normalization import NORMALIZATION_VERSION
 from data.export import ExportPartition
 from data.ingest import ingest_experiment
 from data.readers.factory import open_reader
 from data.readers.filtered_export_reader import FilteredExportReader
+from ui.jobs import JobCancelledError, get_job_service
 
 _logger = logging.getLogger("analizador.ui.state")
 
@@ -103,6 +114,123 @@ def compute_t0(
     return min(candidates) if candidates else 0.0
 
 
+def prepare_dataset(
+    path: str | Path,
+    partition: ExportPartition = "resultantes",
+    sensors_config_path: Path | None = None,
+) -> LoadedDataset:
+    """Ingiere un archivo de origen fuera de cualquier lock.
+
+    Carga configuraciones de sensores, abre el lector correspondiente, realiza la
+    ingesta del experimento y calcula t0. Retorna un objeto LoadedDataset listo
+    para ser publicado en AppState.
+    """
+    cfg_path = sensors_config_path or DEFAULT_SENSORS_CONFIG_PATH
+    sensor_configs = load_sensor_configs(cfg_path)
+    with open_reader(path, partition=partition) as reader:
+        effective_partition = partition if isinstance(reader, FilteredExportReader) else None
+        experiments = reader.list_experiments()
+        if not experiments:
+            raise ValueError(f"El archivo no contiene ningún experimento: {path}")
+        experiment = experiments[0]
+
+        sensores_disponibles = [s for s in sensor_configs if s in reader.available_sensors()]
+        result = ingest_experiment(reader, experiment, sensores_disponibles)
+
+        for sensor in sensores_disponibles:
+            overrides = reader.sensor_config_overrides(experiment, sensor)
+            if overrides:
+                effective = replace(sensor_configs[sensor], **overrides)
+                if effective != sensor_configs[sensor]:
+                    _logger.info(
+                        "Perfil efectivo de %s (dataset %s): %s", sensor, reader.dataset_id, overrides
+                    )
+                sensor_configs = {**sensor_configs, sensor: effective}
+
+    return LoadedDataset(
+        dataset_id=result.dataset_id,
+        source_path=Path(path),
+        experiment=experiment,
+        sensor_configs=sensor_configs,
+        blocks=result.sensors,
+        environmental=result.environmental,
+        events=result.events,
+        t0=compute_t0(result.sensors, result.environmental, result.events),
+        partition=effective_partition,
+    )
+
+
+@dataclass(frozen=True)
+class FilterSnapshot:
+    """Instantánea inmutable del estado de filtrado para operaciones de deshacer/rehacer."""
+    manual_mask: np.ndarray
+    metric_filters: tuple[MetricCondition, ...]
+    metric_mask: np.ndarray
+    active_mask: np.ndarray
+
+
+@dataclass(frozen=True)
+class MetricFilterResult:
+    """Resultado estructurado de operaciones de filtrado por métricas."""
+    filter_version: int
+    active_count: int
+    total_count: int
+    contradiction_warning: str | None = None
+    error: str | None = None
+
+
+def evaluate_metric_conditions(
+    cache: CacheBackend,
+    block: SignalBlock,
+    sensor_config: SensorConfig,
+    dataset_id: str,
+    conditions: Sequence[MetricCondition],
+) -> tuple[np.ndarray, str | None]:
+    """Evalúa una secuencia de condiciones declarativas sobre métricas puntuales.
+
+    - Agrupa por (metric_name, params) para calcular cada métrica una única vez sobre el conjunto completo.
+    - Aplica scatter_to_full para alinear con las señales válidas.
+    - Combina en AND con combine_conditions.
+    - Detecta contradicciones lógicas entre condiciones.
+    """
+    n_total = block.data.shape[0]
+    if not conditions:
+        return np.ones(n_total, dtype=bool), None
+
+    valid_idx = np.where(block.valid_mask)[0]
+    warnings = detect_contradictions(conditions)
+    warning_msg = " | ".join(str(w) for w in warnings) if warnings else None
+
+    cached_metric_values: dict[tuple[str, tuple[tuple[str, Any], ...]], np.ndarray] = {}
+    for cond in conditions:
+        m_name = cond.metric_name or cond.metric_id
+        key = (m_name, cond.params)
+        if key not in cached_metric_values:
+            params_dict = dict(cond.params) if cond.params else None
+            _t, vals = get_or_compute_puntual(
+                cache=cache,
+                block=block,
+                sensor_config=sensor_config,
+                dataset_id=dataset_id,
+                metric_id=m_name,
+                params=params_dict,
+                active_mask=None,
+            )
+            cached_metric_values[key] = vals
+
+    condition_masks: list[np.ndarray] = []
+    for cond in conditions:
+        m_name = cond.metric_name or cond.metric_id
+        key = (m_name, cond.params)
+        vals = cached_metric_values[key]
+        partial_mask = evaluate_condition(cond, vals)
+        full_mask = scatter_to_full(partial_mask, valid_idx, n_total)
+        condition_masks.append(full_mask)
+
+    final_mask = combine_conditions(condition_masks, n_total)
+    return final_mask, warning_msg
+
+
 class AppState:
     """Único punto de acceso al dataset cargado y a la navegación de señal activa."""
 
@@ -131,14 +259,16 @@ class AppState:
         self._dataset_version = 0  # 0 = "sin dataset cargado"; se incrementa en cada load_dataset()
         self.cache = SqliteHdf5CacheBackend(cache_dir)
 
-        # Fase 6 (PROMPT §7.2): máscara de filtrado por sensor (True = señal incluida) +
-        # pilas de deshacer/rehacer (snapshots completos de la máscara, uno por
-        # operación de filtrado confirmada) + contador de versión para que los
-        # callbacks de refresco de gráficas sepan cuándo re-renderizar (mismo patrón
-        # que ``_dataset_version``). Todo se resetea en cada ``load_dataset()``.
+        # Fase 6 + Etapa 2: máscaras de filtrado y condiciones declarativas por sensor.
+        # Separación entre exclusión manual geométrica (_manual_mask) y filtros por métricas (_metric_filters).
+        # _active_mask es la composición ya materializada (_manual_mask & _metric_mask).
+        # Las pilas _undo_stack y _redo_stack almacenan snapshots completos (FilterSnapshot).
+        self._manual_mask: dict[SensorName, np.ndarray] = {}
+        self._metric_filters: dict[SensorName, tuple[MetricCondition, ...]] = {}
+        self._metric_mask: dict[SensorName, np.ndarray] = {}
         self._active_mask: dict[SensorName, np.ndarray] = {}
-        self._undo_stack: dict[SensorName, list[np.ndarray]] = {}
-        self._redo_stack: dict[SensorName, list[np.ndarray]] = {}
+        self._undo_stack: dict[SensorName, list[FilterSnapshot]] = {}
+        self._redo_stack: dict[SensorName, list[FilterSnapshot]] = {}
         self._filter_version = 0
 
         # Fase 6: estado del último "Exportar datos filtrados…" lanzado en este proceso
@@ -153,69 +283,24 @@ class AppState:
         self._merge_in_progress = False
         self._merge_message = ""
 
-    def load_dataset(self, path: str | Path, partition: ExportPartition = "resultantes") -> LoadedDataset:
-        """Ingiere un archivo de origen (§10 supuesto #6 de FASE0: un archivo = un
-        experimento independiente) y lo deja como dataset activo.
-
-        El formato del archivo (esquema con chunks, Keysight en memoria segmentada, o
-        una exportación filtrada de esta misma herramienta -- ``data/export.py``) se
-        detecta por contenido en ``open_reader`` -- este método no sabe cuál es, solo
-        habla con la interfaz ``OriginReader`` (§10.3, prueba de fuego #3 del PROMPT
-        maestro). ``partition`` solo tiene efecto sobre una exportación filtrada: qué
-        subconjunto cargar (activas, excluidas, o ambas recombinadas) -- inerte para
-        los otros dos formatos.
-        """
-        # Se cancela ANTES de ingerir, no al final: la ingesta es la etapa cara (medido:
-        # 11-41 s con med_5_ago_3.hdf5) y es justo cuando menos conviene tener un hilo
-        # de precalentamiento obsoleto disputando CPU y reteniendo la matriz anterior.
-        self._cancel_pending_warmup()
-
-        sensor_configs = load_sensor_configs(self._sensors_config_path)
-        with open_reader(path, partition=partition) as reader:
-            # Solo una exportación filtrada tiene particiones; para los otros dos
-            # formatos ``partition`` se ignoró y anotarlo sería mentir sobre lo cargado.
-            effective_partition = partition if isinstance(reader, FilteredExportReader) else None
-            experiments = reader.list_experiments()
-            if not experiments:
-                raise ValueError(f"El archivo no contiene ningún experimento: {path}")
-            experiment = experiments[0]
-
-            # Solo se ingieren los sensores que este origen realmente ofrece -- un
-            # archivo Keysight no tiene AE, y viceversa (§4.4 del plan): sin este
-            # filtro, ingest_experiment pediría lotes a sensores inexistentes y
-            # produciría bloques vacíos silenciosos en vez de simplemente no aparecer.
-            sensores_disponibles = [s for s in sensor_configs if s in reader.available_sensors()]
-            result = ingest_experiment(reader, experiment, sensores_disponibles)
-
-            # El YAML documenta el valor nominal; el archivo puede aportar el efectivo
-            # (p. ej. fs_hz/n_samples reales de una adquisición Keysight, §4.3 del
-            # plan) -- se resuelve aquí, una sola vez por carga, no en cada cálculo.
-            for sensor in sensores_disponibles:
-                overrides = reader.sensor_config_overrides(experiment, sensor)
-                if overrides:
-                    effective = replace(sensor_configs[sensor], **overrides)
-                    if effective != sensor_configs[sensor]:
-                        _logger.info(
-                            "Perfil efectivo de %s (dataset %s): %s", sensor, reader.dataset_id, overrides
-                        )
-                    sensor_configs = {**sensor_configs, sensor: effective}
-
-        dataset = LoadedDataset(
-            dataset_id=result.dataset_id,
-            source_path=Path(path),
-            experiment=experiment,
-            sensor_configs=sensor_configs,
-            blocks=result.sensors,
-            environmental=result.environmental,
-            events=result.events,
-            t0=compute_t0(result.sensors, result.environmental, result.events),
-            partition=effective_partition,
-        )
+    def publish_dataset(self, dataset: LoadedDataset) -> int:
+        """Publica bajo lock un dataset ya preparado en memoria e incrementa la versión."""
         with self._lock:
             self._dataset = dataset
             self._active_index = {sensor: 0 for sensor, block in dataset.blocks.items() if block.data.shape[0] > 0}
             # Un dataset nuevo invalida cualquier filtro previo (son señales distintas) --
             # reseteo duro, igual que el índice de navegación activa.
+            self._manual_mask = {
+                sensor: np.ones(block.data.shape[0], dtype=bool)
+                for sensor, block in dataset.blocks.items()
+                if block.data.shape[0] > 0
+            }
+            self._metric_filters = {sensor: () for sensor in self._manual_mask}
+            self._metric_mask = {
+                sensor: np.ones(block.data.shape[0], dtype=bool)
+                for sensor, block in dataset.blocks.items()
+                if block.data.shape[0] > 0
+            }
             self._active_mask = {
                 sensor: np.ones(block.data.shape[0], dtype=bool)
                 for sensor, block in dataset.blocks.items()
@@ -224,46 +309,100 @@ class AppState:
             self._undo_stack = {sensor: [] for sensor in self._active_mask}
             self._redo_stack = {sensor: [] for sensor in self._active_mask}
             self._dataset_version += 1
+            new_version = self._dataset_version
 
         if self._warmup_on_load:
-            specs = [
-                spec
-                for sensor in dataset.blocks
-                if dataset.blocks[sensor].data.shape[0] > 0
-                for spec in default_warmup_specs(sensor)
-            ]
-            if specs:
-                cancel = threading.Event()
-                with self._lock:
-                    # Se vuelve a señalar bajo el mismo lock que publica el nuevo Event.
-                    # No es redundante con el _cancel_pending_warmup() del inicio: entre
-                    # aquel y esta línea pasa la ingesta entera (11-41 s medidos), tiempo
-                    # de sobra para que OTRA carga -- una segunda pestaña, el selector de
-                    # partición -- haya publicado su propio Event. Sin este set, ese
-                    # warmup quedaría huérfano: nadie más lo cancelaría y correría hasta
-                    # el final reteniendo su matriz, que es el defecto que se corrige.
-                    if self._warmup_cancel is not None:
-                        self._warmup_cancel.set()
-                    self._warmup_cancel = cancel
-                start_background_warmup(
-                    self._cache_dir, dataset.blocks, dataset.sensor_configs, dataset.dataset_id, specs,
-                    cancelled=cancel,
-                )
+            self._trigger_warmup(dataset)
+
+        return new_version
+
+    def _trigger_warmup(self, dataset: LoadedDataset) -> None:
+        specs = [
+            spec
+            for sensor in dataset.blocks
+            if dataset.blocks[sensor].data.shape[0] > 0
+            for spec in default_warmup_specs(sensor)
+        ]
+        if not specs:
+            return
+
+        cancel = threading.Event()
+        with self._lock:
+            # Se vuelve a señalar bajo el mismo lock que publica el nuevo Event.
+            # No es redundante con el _cancel_pending_warmup() del inicio: entre
+            # aquel y esta línea pasa la ingesta entera, tiempo de sobra para que
+            # OTRA carga haya publicado su propio Event.
+            if self._warmup_cancel is not None:
+                self._warmup_cancel.set()
+            self._warmup_cancel = cancel
+
+        job_service = get_job_service()
+        job_service.cancel_kind("warmup")
+
+        cache_dir = self._cache_dir
+        blocks = dataset.blocks
+        sensor_configs = dataset.sensor_configs
+        dataset_id = dataset.dataset_id
+
+        def _warmup_worker(cancel_token: threading.Event, progress_cb: Callable[[float, str], None]) -> list[str]:
+            backend = SqliteHdf5CacheBackend(cache_dir)
+            return warm_cache(backend, blocks, sensor_configs, dataset_id, specs, cancelled=cancel_token)
+
+        job_service.submit(
+            "warmup",
+            _warmup_worker,
+            label=f"Precalentando caché ({dataset.dataset_id})",
+            cancel_token=cancel,
+        )
+
+    def load_dataset(self, path: str | Path, partition: ExportPartition = "resultantes") -> LoadedDataset:
+        """Ingiere un archivo de origen síncronamente y lo deja como dataset activo."""
+        self._cancel_pending_warmup()
+        dataset = prepare_dataset(path, partition=partition, sensors_config_path=self._sensors_config_path)
+        self.publish_dataset(dataset)
         return dataset
 
-    def _cancel_pending_warmup(self) -> None:
-        """Señala al precalentamiento en curso (si lo hay) que abandone.
+    def begin_load(self, path: str | Path, partition: ExportPartition = "resultantes") -> str:
+        """Inicia la carga de un dataset en segundo plano mediante JobService.
 
-        No espera a que el hilo muera: cortar es un ahorro, no una precondición, y
-        bloquear aquí congelaría la interfaz justo lo que se quiere evitar. El hilo
-        termina la métrica que tenga entre manos y sale antes de empezar la siguiente.
-        Lo ya calculado queda en el caché y sigue siendo válido -- la clave incluye el
-        ``dataset_id``, así que nada de eso se confunde con el dataset nuevo.
+        Retorna el job_id asignado. La publicación del dataset ocurrirá al completarse
+        la ingesta de forma diferida bajo el lock del proceso, incrementando `dataset_version`.
         """
+        self._cancel_pending_warmup()
+        job_service = get_job_service()
+        job_service.cancel_kind("load_dataset")
+
+        cfg_path = self._sensors_config_path
+        filename = Path(path).name
+
+        def _load_job(cancel_token: threading.Event, progress_cb: Callable[[float, str], None]) -> LoadedDataset:
+            progress_cb(0.1, f"Abriendo lector para {filename}...")
+            if cancel_token.is_set():
+                raise JobCancelledError("Carga cancelada antes de iniciar.")
+            dataset = prepare_dataset(path, partition=partition, sensors_config_path=cfg_path)
+            if cancel_token.is_set():
+                raise JobCancelledError("Carga cancelada durante la ingesta.")
+            progress_cb(0.85, "Publicando dataset...")
+            self.publish_dataset(dataset)
+            progress_cb(1.0, f"Dataset {dataset.dataset_id} publicado.")
+            return dataset
+
+        return job_service.submit(
+            "load_dataset",
+            _load_job,
+            label=f"Cargando {filename} ({partition})",
+        )
+
+    def _cancel_pending_warmup(self) -> None:
+        """Señala al precalentamiento en curso (si lo hay) que abandone."""
         with self._lock:
             cancel, self._warmup_cancel = self._warmup_cancel, None
         if cancel is not None:
             cancel.set()
+        try:
+            get_job_service().cancel_kind("warmup")
+        except Exception:
+            pass
 
     @property
     def dataset(self) -> LoadedDataset | None:
@@ -341,32 +480,53 @@ class AppState:
 
     def apply_filter(self, sensor: SensorName, exclude_indices: np.ndarray) -> int:
         """Excluye ``exclude_indices`` (índices cronológicos globales) de la máscara
-        activa del sensor -- no destructivo, solo apaga bits. Empuja el estado ANTERIOR
-        a la pila de deshacer y limpia la pila de rehacer (nueva rama de historia,
-        invalida cualquier "rehacer" pendiente). Retorna el ``filter_version`` nuevo."""
+        manual del sensor -- no destructivo, solo apaga bits.
+        Compone eager: _active_mask = _manual_mask & _metric_mask.
+        Empuja el FilterSnapshot ANTERIOR a la pila de deshacer y limpia la pila de rehacer.
+        Retorna el ``filter_version`` nuevo."""
         with self._lock:
-            if sensor not in self._active_mask:
+            if sensor not in self._active_mask or sensor not in self._manual_mask:
                 return self._filter_version
-            previous = self._active_mask[sensor].copy()
-            new_mask = previous.copy()
-            new_mask[np.asarray(exclude_indices, dtype=np.int64)] = False
-            self._undo_stack[sensor].append(previous)
+            current_snapshot = FilterSnapshot(
+                manual_mask=self._manual_mask[sensor].copy(),
+                metric_filters=self._metric_filters.get(sensor, ()),
+                metric_mask=self._metric_mask[sensor].copy(),
+                active_mask=self._active_mask[sensor].copy(),
+            )
+            new_manual = self._manual_mask[sensor].copy()
+            new_manual[np.asarray(exclude_indices, dtype=np.int64)] = False
+            self._manual_mask[sensor] = new_manual
+            new_active = new_manual & self._metric_mask[sensor]
+            self._active_mask[sensor] = new_active
+
+            self._undo_stack[sensor].append(current_snapshot)
+            if len(self._undo_stack[sensor]) > 50:
+                self._undo_stack[sensor].pop(0)
             self._redo_stack[sensor].clear()
-            self._active_mask[sensor] = new_mask
             self._filter_version += 1
             return self._filter_version
 
     def undo_filter(self, sensor: SensorName) -> int:
         """Restaura la máscara al estado anterior a la última operación aplicada.
-        No-op silencioso (sin excepción) si no hay nada que deshacer -- mismo espíritu
-        que ``PreventUpdate`` en los callbacks, para no obligar a manejarlo con try/except."""
+        No-op silencioso (sin excepción) si no hay nada que deshacer."""
         with self._lock:
             if sensor not in self._undo_stack or not self._undo_stack[sensor]:
                 return self._filter_version
-            current = self._active_mask[sensor]
-            previous = self._undo_stack[sensor].pop()
-            self._redo_stack[sensor].append(current)
-            self._active_mask[sensor] = previous
+            current_snapshot = FilterSnapshot(
+                manual_mask=self._manual_mask[sensor].copy(),
+                metric_filters=self._metric_filters.get(sensor, ()),
+                metric_mask=self._metric_mask[sensor].copy(),
+                active_mask=self._active_mask[sensor].copy(),
+            )
+            previous_snapshot = self._undo_stack[sensor].pop()
+            self._redo_stack[sensor].append(current_snapshot)
+            if len(self._redo_stack[sensor]) > 50:
+                self._redo_stack[sensor].pop(0)
+
+            self._manual_mask[sensor] = previous_snapshot.manual_mask.copy()
+            self._metric_filters[sensor] = previous_snapshot.metric_filters
+            self._metric_mask[sensor] = previous_snapshot.metric_mask.copy()
+            self._active_mask[sensor] = previous_snapshot.active_mask.copy()
             self._filter_version += 1
             return self._filter_version
 
@@ -375,27 +535,239 @@ class AppState:
         with self._lock:
             if sensor not in self._redo_stack or not self._redo_stack[sensor]:
                 return self._filter_version
-            current = self._active_mask[sensor]
-            next_mask = self._redo_stack[sensor].pop()
-            self._undo_stack[sensor].append(current)
-            self._active_mask[sensor] = next_mask
+            current_snapshot = FilterSnapshot(
+                manual_mask=self._manual_mask[sensor].copy(),
+                metric_filters=self._metric_filters.get(sensor, ()),
+                metric_mask=self._metric_mask[sensor].copy(),
+                active_mask=self._active_mask[sensor].copy(),
+            )
+            next_snapshot = self._redo_stack[sensor].pop()
+            self._undo_stack[sensor].append(current_snapshot)
+            if len(self._undo_stack[sensor]) > 50:
+                self._undo_stack[sensor].pop(0)
+
+            self._manual_mask[sensor] = next_snapshot.manual_mask.copy()
+            self._metric_filters[sensor] = next_snapshot.metric_filters
+            self._metric_mask[sensor] = next_snapshot.metric_mask.copy()
+            self._active_mask[sensor] = next_snapshot.active_mask.copy()
             self._filter_version += 1
             return self._filter_version
 
     def reset_filters(self, sensor: SensorName) -> int:
         """Reseteo DURO: máscara a todo-``True`` y limpia ambas pilas por completo --
         "restablecer todo" es una acción de borrón y cuenta nueva, deliberadamente no
-        deshacible (distinta de deshacer), y alcanza solo al sensor indicado (UHF y AE
-        nunca comparten máscara ni historial, PROMPT §7.2: "un único estado... por
-        sensor"). No-op si el sensor no tiene dataset cargado."""
+        deshacible (distinta de deshacer), y alcanza solo al sensor indicado.
+        No-op si el sensor no tiene dataset cargado."""
         with self._lock:
             if sensor not in self._active_mask:
                 return self._filter_version
             n = self._active_mask[sensor].shape[0]
+            self._manual_mask[sensor] = np.ones(n, dtype=bool)
+            self._metric_filters[sensor] = ()
+            self._metric_mask[sensor] = np.ones(n, dtype=bool)
             self._active_mask[sensor] = np.ones(n, dtype=bool)
             self._undo_stack[sensor] = []
             self._redo_stack[sensor] = []
             self._filter_version += 1
+            return self._filter_version
+
+    def add_metric_filter(self, sensor: SensorName, condition: MetricCondition) -> MetricFilterResult:
+        """Añade una condición de filtrado declarativo por métrica.
+        Paso 1: lectura de candidatos bajo lock.
+        Paso 2: evaluación fuera de lock (no bloquea el proceso Dash).
+        Paso 3: validación de integridad y publicación atómica bajo lock.
+        """
+        with self._lock:
+            if self._dataset is None or sensor not in self._dataset.blocks:
+                cnt = int(self._active_mask[sensor].sum()) if sensor in self._active_mask else 0
+                tot = int(self._active_mask[sensor].shape[0]) if sensor in self._active_mask else 0
+                return MetricFilterResult(filter_version=self._filter_version, active_count=cnt, total_count=tot, error="Sin dataset cargado.")
+            block = self._dataset.blocks[sensor]
+            sensor_config = self._dataset.sensor_configs[sensor]
+            dataset_id = self._dataset.dataset_id
+            expected_len = block.data.shape[0]
+            current_filters = self._metric_filters.get(sensor, ())
+            cond_k = condition_key(condition)
+            if any(condition_key(c) == cond_k for c in current_filters):
+                cnt = int(self._active_mask[sensor].sum())
+                tot = int(self._active_mask[sensor].shape[0])
+                return MetricFilterResult(filter_version=self._filter_version, active_count=cnt, total_count=tot)
+            candidate_filters = (*current_filters, condition)
+
+        try:
+            new_metric_mask, warning = evaluate_metric_conditions(
+                cache=self.cache,
+                block=block,
+                sensor_config=sensor_config,
+                dataset_id=dataset_id,
+                conditions=candidate_filters,
+            )
+        except Exception as e:
+            _logger.exception("Error evaluando filtros de métricas: %s", e)
+            with self._lock:
+                cnt = int(self._active_mask[sensor].sum()) if sensor in self._active_mask else 0
+                tot = int(self._active_mask[sensor].shape[0]) if sensor in self._active_mask else 0
+                return MetricFilterResult(filter_version=self._filter_version, active_count=cnt, total_count=tot, error=str(e))
+
+        with self._lock:
+            if (
+                self._dataset is None
+                or self._dataset.dataset_id != dataset_id
+                or sensor not in self._manual_mask
+                or self._manual_mask[sensor].shape[0] != expected_len
+                or new_metric_mask.shape[0] != expected_len
+            ):
+                cnt = int(self._active_mask[sensor].sum()) if sensor in self._active_mask else 0
+                tot = int(self._active_mask[sensor].shape[0]) if sensor in self._active_mask else 0
+                return MetricFilterResult(
+                    filter_version=self._filter_version,
+                    active_count=cnt,
+                    total_count=tot,
+                    error="Dataset modificado durante la evaluación.",
+                )
+
+            current_snapshot = FilterSnapshot(
+                manual_mask=self._manual_mask[sensor].copy(),
+                metric_filters=self._metric_filters.get(sensor, ()),
+                metric_mask=self._metric_mask[sensor].copy(),
+                active_mask=self._active_mask[sensor].copy(),
+            )
+            self._undo_stack[sensor].append(current_snapshot)
+            if len(self._undo_stack[sensor]) > 50:
+                self._undo_stack[sensor].pop(0)
+            self._redo_stack[sensor].clear()
+
+            self._metric_filters[sensor] = candidate_filters
+            self._metric_mask[sensor] = new_metric_mask
+            new_active = self._manual_mask[sensor] & new_metric_mask
+            self._active_mask[sensor] = new_active
+            self._filter_version += 1
+
+            return MetricFilterResult(
+                filter_version=self._filter_version,
+                active_count=int(new_active.sum()),
+                total_count=int(new_active.shape[0]),
+                contradiction_warning=warning,
+            )
+
+    def remove_metric_filter(self, sensor: SensorName, key: str) -> MetricFilterResult:
+        """Elimina una condición de filtrado identificada por su clave canónica estable."""
+        with self._lock:
+            if self._dataset is None or sensor not in self._dataset.blocks:
+                cnt = int(self._active_mask[sensor].sum()) if sensor in self._active_mask else 0
+                tot = int(self._active_mask[sensor].shape[0]) if sensor in self._active_mask else 0
+                return MetricFilterResult(filter_version=self._filter_version, active_count=cnt, total_count=tot, error="Sin dataset cargado.")
+            block = self._dataset.blocks[sensor]
+            sensor_config = self._dataset.sensor_configs[sensor]
+            dataset_id = self._dataset.dataset_id
+            expected_len = block.data.shape[0]
+            current_filters = self._metric_filters.get(sensor, ())
+            candidate_filters = tuple(c for c in current_filters if condition_key(c) != key)
+            if len(candidate_filters) == len(current_filters):
+                cnt = int(self._active_mask[sensor].sum())
+                tot = int(self._active_mask[sensor].shape[0])
+                return MetricFilterResult(filter_version=self._filter_version, active_count=cnt, total_count=tot)
+
+        if not candidate_filters:
+            new_metric_mask = np.ones(expected_len, dtype=bool)
+            warning: str | None = None
+        else:
+            try:
+                new_metric_mask, warning = evaluate_metric_conditions(
+                    cache=self.cache,
+                    block=block,
+                    sensor_config=sensor_config,
+                    dataset_id=dataset_id,
+                    conditions=candidate_filters,
+                )
+            except Exception as e:
+                _logger.exception("Error evaluando filtros de métricas tras remoción: %s", e)
+                with self._lock:
+                    cnt = int(self._active_mask[sensor].sum()) if sensor in self._active_mask else 0
+                    tot = int(self._active_mask[sensor].shape[0]) if sensor in self._active_mask else 0
+                    return MetricFilterResult(filter_version=self._filter_version, active_count=cnt, total_count=tot, error=str(e))
+
+        with self._lock:
+            if (
+                self._dataset is None
+                or self._dataset.dataset_id != dataset_id
+                or sensor not in self._manual_mask
+                or self._manual_mask[sensor].shape[0] != expected_len
+                or new_metric_mask.shape[0] != expected_len
+            ):
+                cnt = int(self._active_mask[sensor].sum()) if sensor in self._active_mask else 0
+                tot = int(self._active_mask[sensor].shape[0]) if sensor in self._active_mask else 0
+                return MetricFilterResult(
+                    filter_version=self._filter_version,
+                    active_count=cnt,
+                    total_count=tot,
+                    error="Dataset modificado durante la evaluación.",
+                )
+
+            current_snapshot = FilterSnapshot(
+                manual_mask=self._manual_mask[sensor].copy(),
+                metric_filters=self._metric_filters.get(sensor, ()),
+                metric_mask=self._metric_mask[sensor].copy(),
+                active_mask=self._active_mask[sensor].copy(),
+            )
+            self._undo_stack[sensor].append(current_snapshot)
+            if len(self._undo_stack[sensor]) > 50:
+                self._undo_stack[sensor].pop(0)
+            self._redo_stack[sensor].clear()
+
+            self._metric_filters[sensor] = candidate_filters
+            self._metric_mask[sensor] = new_metric_mask
+            new_active = self._manual_mask[sensor] & new_metric_mask
+            self._active_mask[sensor] = new_active
+            self._filter_version += 1
+
+            return MetricFilterResult(
+                filter_version=self._filter_version,
+                active_count=int(new_active.sum()),
+                total_count=int(new_active.shape[0]),
+                contradiction_warning=warning,
+            )
+
+    def clear_metric_filters(self, sensor: SensorName) -> MetricFilterResult:
+        """Elimina todos los filtros por métrica del sensor, preservando las exclusiones manuales."""
+        with self._lock:
+            if sensor not in self._active_mask or sensor not in self._manual_mask:
+                return MetricFilterResult(filter_version=self._filter_version, active_count=0, total_count=0)
+            if not self._metric_filters.get(sensor, ()):
+                cnt = int(self._active_mask[sensor].sum())
+                tot = int(self._active_mask[sensor].shape[0])
+                return MetricFilterResult(filter_version=self._filter_version, active_count=cnt, total_count=tot)
+
+            current_snapshot = FilterSnapshot(
+                manual_mask=self._manual_mask[sensor].copy(),
+                metric_filters=self._metric_filters.get(sensor, ()),
+                metric_mask=self._metric_mask[sensor].copy(),
+                active_mask=self._active_mask[sensor].copy(),
+            )
+            self._undo_stack[sensor].append(current_snapshot)
+            if len(self._undo_stack[sensor]) > 50:
+                self._undo_stack[sensor].pop(0)
+            self._redo_stack[sensor].clear()
+
+            n = self._manual_mask[sensor].shape[0]
+            self._metric_filters[sensor] = ()
+            self._metric_mask[sensor] = np.ones(n, dtype=bool)
+            new_active = self._manual_mask[sensor].copy()
+            self._active_mask[sensor] = new_active
+            self._filter_version += 1
+
+            return MetricFilterResult(
+                filter_version=self._filter_version,
+                active_count=int(new_active.sum()),
+                total_count=int(new_active.shape[0]),
+            )
+
+    def get_metric_filters(self, sensor: SensorName) -> tuple[MetricCondition, ...]:
+        with self._lock:
+            return self._metric_filters.get(sensor, ())
+
+    def get_filter_version(self) -> int:
+        with self._lock:
             return self._filter_version
 
     def get_filter_counts(self, sensor: SensorName) -> tuple[int, int, int]:
