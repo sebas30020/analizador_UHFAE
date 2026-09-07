@@ -8,7 +8,12 @@ from core.models import EnvironmentalSeries, EventSeries, SensorConfig, SignalBl
 from ui.components.event_lines import build_event_lines_trace
 from ui.components.time_axis import TIME_AXIS_TITLE, to_elapsed_minutes
 from utils.profiling import stage
-from viz.decimation import bin_reduce_minmax, build_vertical_segments
+from viz.decimation import (
+    ENVELOPE_DECIMATION_BINS,
+    ENVELOPE_EXACT_LIMIT,
+    bin_reduce_minmax,
+    build_vertical_segments,
+)
 
 SIGNAL_COLOR = "#4A7BB0"
 TEMPERATURE_COLOR = "#E07B39"
@@ -129,18 +134,32 @@ def build_timeseries_figure(
         fig = go.Figure()
 
         valid = block.valid_mask & active_mask
-        ctx["n_senales"] = int(valid.sum())
+        n_active = int(valid.sum())
+        ctx["n_senales"] = n_active
         anchor: go.Scatter
         if valid.any():
             t = to_elapsed_minutes(block.timestamps[valid], t0)
             mm = block.minmax[valid]
             anchor = _build_selection_anchor_trace(t, mm[:, 0])
-            y_min = float(mm[:, 0].min())
-            y_max = float(mm[:, 1].max())
+
+            if n_active > ENVELOPE_EXACT_LIMIT:
+                t_env, mm_min_env, mm_max_env = bin_reduce_minmax(
+                    t, mm[:, 0], mm[:, 1], n_bins=ENVELOPE_DECIMATION_BINS
+                )
+                xs, ys = build_vertical_segments(t_env, mm_min_env, mm_max_env)
+                y_min = float(mm_min_env.min())
+                y_max = float(mm_max_env.max())
+                ctx["envolvente_diezmada"] = True
+            else:
+                xs, ys = build_vertical_segments(t, mm[:, 0], mm[:, 1])
+                y_min = float(mm[:, 0].min())
+                y_max = float(mm[:, 1].max())
+                ctx["envolvente_diezmada"] = False
+
             if y_min == y_max:
                 y_min -= 1.0
                 y_max += 1.0
-            xs, ys = build_vertical_segments(t, mm[:, 0], mm[:, 1])
+
             fig.add_trace(
                 go.Scattergl(
                     x=xs,

@@ -358,3 +358,48 @@ def test_resolve_map_selection_signal_indices_empty_selection():
 
 def test_format_filter_status():
     assert format_filter_status(8, 10, 2) == "8/10 señales activas · 2 filtro(s) aplicado(s)"
+
+
+def test_timeseries_selection_decimated_points_fallback_disabled():
+    # When is_decimated=True, points fallback must be strictly disabled
+    points = [{"curveNumber": 0, "pointNumber": 0}, {"curveNumber": 0, "pointNumber": 3}]
+    result = resolve_timeseries_selection_indices(points, _ACTIVE_SIGNALS, is_decimated=True)
+    assert len(result) == 0
+
+    dict_payload = {"points": points}
+    result_dict = resolve_timeseries_selection_indices(dict_payload, _ACTIVE_SIGNALS, is_decimated=True)
+    assert len(result_dict) == 0
+
+
+def test_timeseries_selection_decimated_geometric_selection_enabled():
+    # Server-side geometry (lasso & range) must work accurately even when is_decimated=True
+    active = np.array([10, 20, 30, 40])
+    t = np.array([1.0, 2.0, 3.0, 5.0])
+    minmax = np.array([
+        [-0.5, 0.5],    # 10 at t=1.0: outside
+        [-1.0, 1.0],    # 20 at t=2.0: inside
+        [-10.0, 10.0],  # 30 at t=3.0: intersects box
+        [-0.5, 0.5],    # 40 at t=5.0: outside
+    ])
+    range_payload = {
+        "range": {
+            "x": [1.5, 3.5],
+            "y": [-2.0, 2.0],
+        }
+    }
+    result = resolve_timeseries_selection_indices(
+        range_payload, active, timestamps_minutes=t, minmax=minmax, is_decimated=True
+    )
+    assert list(result) == [20, 30]
+
+    lasso_payload = {
+        "lassoPoints": {
+            "x": [1.5, 2.5, 2.5, 1.5, 1.5],
+            "y": [-1.5, -1.5, 1.5, 1.5, -1.5],
+        }
+    }
+    result_lasso = resolve_timeseries_selection_indices(
+        lasso_payload, active, timestamps_minutes=t, minmax=minmax, is_decimated=True
+    )
+    assert list(result_lasso) == [20]
+

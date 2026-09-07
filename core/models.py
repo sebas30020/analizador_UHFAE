@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Callable, Literal
 
 import numpy as np
 import yaml
@@ -83,29 +83,207 @@ class NormalizationInfo:
     version: str
 
 
-@dataclass
+RowSource = Callable[[int, int], np.ndarray]
+SingleRowSource = Callable[[int], np.ndarray]
+IndicesSource = Callable[[np.ndarray], np.ndarray]
+
+
+class LazyDataProxy:
+    """Proxy liviano para compatibilidad de inspección sobre SignalBlock perezoso.
+
+    Permite acceder a .shape, len(), .ndim, .dtype e indexación básica
+    sin materializar la matriz completa en RAM.
+    """
+
+    def __init__(self, block: "SignalBlock") -> None:
+        self._block = block
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (self._block.n_signals, self._block.n_samples)
+
+    @property
+    def ndim(self) -> int:
+        return 2
+
+    @property
+    def dtype(self) -> np.dtype:
+        return np.dtype(np.float32)
+
+    def __len__(self) -> int:
+        return self._block.n_signals
+
+    def __array__(self, dtype: Any = None) -> np.ndarray:
+        arr = self._block.rows(0, self._block.n_signals)
+        if dtype is not None:
+            return arr.astype(dtype, copy=False)
+        return arr
+
+    def __getitem__(self, item: Any) -> np.ndarray:
+        if isinstance(item, (int, np.integer)):
+            return self._block.row(int(item))
+        if isinstance(item, slice):
+            start = 0 if item.start is None else int(item.start)
+            stop = self._block.n_signals if item.stop is None else int(item.stop)
+            if item.step is not None and item.step != 1:
+                indices = np.arange(start, stop, item.step)
+                return self._block.rows_by_indices(indices)
+            return self._block.rows(start, stop)
+        if isinstance(item, tuple):
+            row_item = item[0]
+            col_item = item[1] if len(item) > 1 else slice(None)
+            if isinstance(row_item, (int, np.integer)):
+                row_arr = self._block.row(int(row_item))
+                return row_arr[col_item]
+            if isinstance(row_item, slice):
+                start = 0 if row_item.start is None else int(row_item.start)
+                stop = self._block.n_signals if row_item.stop is None else int(row_item.stop)
+                if row_item.step is not None and row_item.step != 1:
+                    indices = np.arange(start, stop, row_item.step)
+                    rows_arr = self._block.rows_by_indices(indices)
+                else:
+                    rows_arr = self._block.rows(start, stop)
+                return rows_arr[:, col_item] if rows_arr.ndim == 2 else rows_arr[col_item]
+            if isinstance(row_item, (np.ndarray, list)):
+                rows_arr = self._block.rows_by_indices(np.asarray(row_item))
+                return rows_arr[:, col_item] if rows_arr.ndim == 2 else rows_arr[col_item]
+        if isinstance(item, (np.ndarray, list)):
+            arr_key = np.asarray(item)
+            if arr_key.dtype == bool:
+                indices = np.where(arr_key)[0]
+                return self._block.rows_by_indices(indices)
+            return self._block.rows_by_indices(arr_key)
+        raise TypeError(f"Indexación no soportada en LazyDataProxy: {type(item)}")
+
+
 class SignalBlock:
     """Bloque contiguo de señales de un sensor, ya en orden cronológico.
 
-    Es la unidad de E/S entre ``data/ingest.py``, ``data/storage.py`` y el motor de
-    métricas: nunca se carga la matriz global completa en RAM (§5.1, §9.1 del PROMPT).
+    Soporta modalidad perezosa (fuera de núcleo) y modalidad residente en RAM
+    (para tests unitarios y operaciones en memoria).
     """
 
-    data: np.ndarray            # (n, M) float32, cruda (sin normalizar)
-    timestamps: np.ndarray      # (n,) float64
-    trigger: np.ndarray         # (n,) float64
-    vrange: np.ndarray          # (n,) float64
-    valid_mask: np.ndarray      # (n,) bool
-    minmax: np.ndarray          # (n, 2) float32 -> [min, max] por señal
+    def __init__(
+        self,
+        data: np.ndarray | None = None,
+        timestamps: np.ndarray | None = None,
+        trigger: np.ndarray | None = None,
+        vrange: np.ndarray | None = None,
+        valid_mask: np.ndarray | None = None,
+        minmax: np.ndarray | None = None,
+        *,
+        row_source: RowSource | None = None,
+        single_row_source: SingleRowSource | None = None,
+        indices_source: IndicesSource | None = None,
+        n_samples: int | None = None,
+        order: np.ndarray | None = None,
+    ) -> None:
+        if (
+            timestamps is None
+            or trigger is None
+            or vrange is None
+            or valid_mask is None
+            or minmax is None
+        ):
+            raise ValueError(
+                "timestamps, trigger, vrange, valid_mask y minmax son obligatorios en SignalBlock."
+            )
 
-    def __post_init__(self) -> None:
-        n = self.data.shape[0]
-        for name in ("timestamps", "trigger", "vrange", "valid_mask"):
-            arr = getattr(self, name)
+        self.timestamps: np.ndarray = np.asarray(timestamps, dtype=np.float64)
+        self.trigger: np.ndarray = np.asarray(trigger, dtype=np.float64)
+        self.vrange: np.ndarray = np.asarray(vrange, dtype=np.float64)
+        self.valid_mask: np.ndarray = np.asarray(valid_mask, dtype=bool)
+        self.minmax: np.ndarray = np.asarray(minmax, dtype=np.float32)
+
+        n = self.timestamps.shape[0]
+        for name, arr in (("trigger", self.trigger), ("vrange", self.vrange), ("valid_mask", self.valid_mask)):
             if arr.shape[0] != n:
                 raise ValueError(f"SignalBlock.{name} tiene {arr.shape[0]} filas, esperaba {n}")
         if self.minmax.shape != (n, 2):
             raise ValueError(f"SignalBlock.minmax debe tener forma ({n}, 2), tiene {self.minmax.shape}")
+
+        self._data: np.ndarray | None = None
+        if data is not None:
+            data_arr = np.asarray(data, dtype=np.float32)
+            if data_arr.shape[0] != n:
+                raise ValueError(f"SignalBlock.data tiene {data_arr.shape[0]} filas, esperaba {n}")
+            self._data = data_arr
+            self._n_samples = int(data_arr.shape[1]) if n > 0 else (n_samples or 0)
+        else:
+            self._n_samples = n_samples if n_samples is not None else 0
+
+        self._row_source = row_source
+        self._single_row_source = single_row_source
+        self._indices_source = indices_source
+        self._order = np.asarray(order, dtype=np.int64) if order is not None else None
+
+    @property
+    def n_signals(self) -> int:
+        return int(self.timestamps.shape[0])
+
+    @property
+    def n_samples(self) -> int:
+        return int(self._n_samples)
+
+    def __len__(self) -> int:
+        return self.n_signals
+
+    @property
+    def data(self) -> Any:
+        if self._data is not None and self._order is None:
+            return self._data
+        return LazyDataProxy(self)
+
+    @data.setter
+    def data(self, value: np.ndarray) -> None:
+        self._data = np.asarray(value, dtype=np.float32)
+        self._n_samples = self._data.shape[1] if self._data.shape[0] > 0 else self._n_samples
+        self._order = None
+
+    def rows(self, start: int, stop: int) -> np.ndarray:
+        """Retorna las filas [start, stop) en orden cronológico (float32, 2D)."""
+        if start >= stop or start >= self.n_signals:
+            return np.empty((0, self.n_samples), dtype=np.float32)
+        start = max(0, start)
+        stop = min(self.n_signals, stop)
+        if self._data is not None:
+            if self._order is None:
+                return self._data[start:stop]
+            return self._data[self._order[start:stop]]
+        if self._row_source is not None:
+            return self._row_source(start, stop)
+        raise RuntimeError("SignalBlock no posee matriz en memoria ni row_source configurado.")
+
+    def row(self, index: int) -> np.ndarray:
+        """Retorna la traza individual en el índice cronológico global (float32, 1D)."""
+        if index < 0 or index >= self.n_signals:
+            raise IndexError(f"Índice {index} fuera de rango [0, {self.n_signals})")
+        if self._data is not None:
+            if self._order is None:
+                return self._data[index]
+            return self._data[self._order[index]]
+        if self._single_row_source is not None:
+            return self._single_row_source(index)
+        if self._row_source is not None:
+            return self._row_source(index, index + 1)[0]
+        raise RuntimeError("SignalBlock no posee matriz en memoria ni single_row_source configurado.")
+
+    def rows_by_indices(self, indices: np.ndarray | list[int]) -> np.ndarray:
+        """Retorna las filas correspondientes a una secuencia de índices cronológicos (float32, 2D)."""
+        idx_arr = np.asarray(indices, dtype=np.int64)
+        if idx_arr.size == 0:
+            return np.empty((0, self.n_samples), dtype=np.float32)
+        if self._data is not None:
+            if self._order is None:
+                return self._data[idx_arr]
+            return self._data[self._order[idx_arr]]
+        if self._indices_source is not None:
+            return self._indices_source(idx_arr)
+        return np.stack([self.row(int(i)) for i in idx_arr], axis=0)
+
+    def __repr__(self) -> str:
+        mode = "resident" if self._data is not None else "lazy"
+        return f"SignalBlock(n_signals={self.n_signals}, n_samples={self.n_samples}, mode='{mode}')"
 
 
 @dataclass

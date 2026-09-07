@@ -69,7 +69,8 @@ from ui.components.time_axis import elapsed_minutes_to_unix_seconds, to_elapsed_
 from ui.map_registry import get_map_registry
 from ui.reference_registry import get_reference_registry
 from ui.state import AppState, ExportSnapshot, get_state
-from viz.maps import build_map_dataset, resolve_map_highlight_coords
+from viz.decimation import ENVELOPE_EXACT_LIMIT, MAP_3D_MAX_POINTS
+from viz.maps import MapDataset, build_map_dataset, resolve_map_highlight_coords
 from viz.reference_line import build_prefix_sums
 from viz.reference_line import mean_until as compute_reference_mean
 from viz.smoothing import SmoothingSpec
@@ -257,6 +258,17 @@ def _render_map_3d_slot(cache, block, cfg, dataset, sensor, x_metric, y_metric, 
             cache, block, cfg, dataset.dataset_id,
             {"x": x_metric, "y": y_metric, "z": z_metric}, active_mask=active_mask,
         )
+        n_points = map_dataset.coords["x"].shape[0]
+        if n_points > MAP_3D_MAX_POINTS:
+            stride = int(np.ceil(n_points / MAP_3D_MAX_POINTS))
+            sub_coords = {k: v[::stride] for k, v in map_dataset.coords.items()}
+            sub_indices = map_dataset.signal_indices[::stride]
+            map_dataset = MapDataset(
+                signal_indices=sub_indices,
+                coords=sub_coords,
+                omitted_counts=map_dataset.omitted_counts,
+                axis_labels=map_dataset.axis_labels,
+            )
         registry.set("3d", map_dataset)
         fig = build_map_3d_figure(
             map_dataset, same_metric_warning=has_duplicate, selected_signal_index=selected_signal_index,
@@ -434,7 +446,7 @@ def register_callbacks(app: Dash) -> None:
         dataset = state.dataset
         if dataset is None or sensor not in dataset.blocks:
             raise PreventUpdate
-        n_total = dataset.blocks[sensor].data.shape[0]
+        n_total = dataset.blocks[sensor].n_signals
         if n_total == 0:
             raise PreventUpdate
 
@@ -596,11 +608,13 @@ def register_callbacks(app: Dash) -> None:
                 return []
             t_minutes = to_elapsed_minutes(block.timestamps[active_signal_indices], dataset.t0)
             mm_active = block.minmax[active_signal_indices]
+            is_decimated = (active_signal_indices.shape[0] > ENVELOPE_EXACT_LIMIT)
             return resolve_timeseries_selection_indices(
                 selected_timeseries,
                 active_signal_indices,
                 timestamps_minutes=t_minutes,
                 minmax=mm_active,
+                is_decimated=is_decimated,
             ).tolist()
 
         if isinstance(triggered, dict) and triggered.get("type") == "graph-map":
@@ -735,7 +749,7 @@ def register_callbacks(app: Dash) -> None:
         # debe decirlo en vez de quedar con tres gráficas vacías sin explicación.
         state = get_state()
         dataset = state.dataset
-        sensor_has_signals = dataset is not None and sensor in dataset.blocks and dataset.blocks[sensor].data.shape[0] > 0
+        sensor_has_signals = dataset is not None and sensor in dataset.blocks and dataset.blocks[sensor].n_signals > 0
         notice = resolve_sensor_availability_notice(sensor, dataset is not None, sensor_has_signals)
         class_name = "sensor-empty-notice" if notice else "sensor-empty-notice hidden"
         return notice or "", class_name
@@ -895,12 +909,12 @@ def register_callbacks(app: Dash) -> None:
         state = get_state()
         dataset = state.dataset
         empty_panel = [build_metadata_panel(0, 0, 0.0, 0.0, 0.0, is_decimated=False)]
-        if dataset is None or sensor not in dataset.blocks or dataset.blocks[sensor].data.shape[0] == 0:
+        if dataset is None or sensor not in dataset.blocks or dataset.blocks[sensor].n_signals == 0:
             return go.Figure(), empty_panel
 
         block = dataset.blocks[sensor]
         cfg = dataset.sensor_configs[sensor]
-        n_total = block.data.shape[0]
+        n_total = block.n_signals
         index = clamp_index(int(nav_value) if nav_value is not None else state.get_active_index(sensor), n_total)
 
         x_range = None
@@ -915,10 +929,13 @@ def register_callbacks(app: Dash) -> None:
         # máximo visible en la gráfica coincida con Vmax/RMS/etc. El checkbox "ver señal
         # cruda" es el flag explícito de depuración que exige el PROMPT para comparar.
         all_indices = [index] + overlay_indices
+        raw_signals = [block.row(i) for i in all_indices]
         if is_raw:
-            batch = block.data[all_indices]
+            batch = np.stack(raw_signals, axis=0) if raw_signals else np.empty((0, block.n_samples), dtype=np.float32)
         else:
-            batch = normalize(block.data[all_indices], block.vrange[all_indices])
+            vr = block.vrange[all_indices]
+            stacked = np.stack(raw_signals, axis=0) if raw_signals else np.empty((0, block.n_samples), dtype=np.float32)
+            batch = normalize(stacked, vr)
         signal_row, overlay_rows = batch[0], list(batch[1:])
 
         fig, is_decimated = build_signal_figure(

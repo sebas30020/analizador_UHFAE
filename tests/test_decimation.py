@@ -126,3 +126,43 @@ def test_build_vertical_segments_large_dataset_fidelity():
     assert np.isnan(xs[2::3]).sum() == n
     assert np.isnan(ys[2::3]).sum() == n
 
+
+def test_decimate_constants():
+    from viz.decimation import ENVELOPE_DECIMATION_BINS, ENVELOPE_EXACT_LIMIT, MAP_3D_MAX_POINTS
+    assert ENVELOPE_EXACT_LIMIT == 100_000
+    assert ENVELOPE_DECIMATION_BINS == 2000
+    assert MAP_3D_MAX_POINTS == 15_000
+
+
+def test_decimate_envelope_exact_when_at_or_below_limit():
+    from viz.decimation import ENVELOPE_EXACT_LIMIT, decimate_envelope
+    n = 500
+    t = np.linspace(0.0, 100.0, n)
+    ymin = -np.ones(n)
+    ymax = np.ones(n)
+    t_out, ymin_out, ymax_out, is_dec = decimate_envelope(t, ymin, ymax, limit=ENVELOPE_EXACT_LIMIT)
+    assert is_dec is False
+    assert np.array_equal(t_out, t)
+    assert np.array_equal(ymin_out, ymin)
+    assert np.array_equal(ymax_out, ymax)
+
+
+def test_decimate_envelope_reduced_when_above_limit():
+    from viz.decimation import decimate_envelope
+    # Create 100_005 signals to cross the threshold
+    n = 100_005
+    t = np.linspace(0.0, 1000.0, n)
+    ymin = np.zeros(n)
+    ymax = np.zeros(n)
+    # Isolated sharp peaks
+    ymin[500] = -999.0
+    ymax[50_000] = 1234.0
+
+    t_out, ymin_out, ymax_out, is_dec = decimate_envelope(t, ymin, ymax, limit=100_000, n_bins=2000)
+    assert is_dec is True
+    assert len(t_out) <= 2000
+    # Peak extremes must be strictly preserved by the exact minmax bin reduction
+    assert ymin_out.min() == -999.0
+    assert ymax_out.max() == 1234.0
+
+

@@ -270,3 +270,69 @@ def test_compute_group_intrinsic_extra_mask_excludes_signal_from_rate(sensor_con
     t, v, partial = compute_group_intrinsic(block, sensor_config, "tasa_pulsos", groups, extra_mask=extra_mask)
     assert len(v) == 1
     assert np.isclose(v[0], 4 / 60.0)  # 4 señales activas, no 5
+
+
+def test_compute_puntual_with_lazy_signal_block(sensor_config):
+    raw_data = np.arange(40, dtype=np.float32).reshape(10, 4)
+    timestamps = np.arange(10, dtype=np.float64)
+    vrange = np.full(10, 2.0)
+    valid_mask = np.ones(10, dtype=bool)
+    valid_mask[4] = False  # one invalid signal
+
+    called_ranges: list[tuple[int, int]] = []
+
+    def mock_row_source(start: int, stop: int) -> np.ndarray:
+        called_ranges.append((start, stop))
+        return raw_data[start:stop]
+
+    # sensor_config block_n_signals: let's test chunked iteration
+    lazy_block = SignalBlock(
+        data=None,
+        timestamps=timestamps,
+        trigger=np.zeros(10),
+        vrange=vrange,
+        valid_mask=valid_mask,
+        minmax=np.zeros((10, 2), dtype=np.float32),
+        row_source=mock_row_source,
+        single_row_source=lambda idx: raw_data[idx],
+        n_samples=4,
+    )
+
+    t, v = compute_puntual(lazy_block, sensor_config, "vmax")
+    assert len(t) == 9  # 10 minus 1 invalid
+    assert len(v) == 9
+    assert len(called_ranges) > 0
+
+    # Compare against in-memory block
+    mem_block = SignalBlock(
+        data=raw_data,
+        timestamps=timestamps,
+        trigger=np.zeros(10),
+        vrange=vrange,
+        valid_mask=valid_mask,
+        minmax=np.zeros((10, 2), dtype=np.float32),
+    )
+    t_mem, v_mem = compute_puntual(mem_block, sensor_config, "vmax")
+    assert np.allclose(t, t_mem)
+    assert np.allclose(v, v_mem)
+
+
+def test_compute_group_reduction_with_lazy_signal_block(sensor_config):
+    raw_data = np.arange(40, dtype=np.float32).reshape(10, 4)
+    timestamps = np.arange(10, dtype=np.float64)
+    lazy_block = SignalBlock(
+        data=None,
+        timestamps=timestamps,
+        trigger=np.zeros(10),
+        vrange=np.ones(10),
+        valid_mask=np.ones(10, dtype=bool),
+        minmax=np.zeros((10, 2), dtype=np.float32),
+        row_source=lambda start, stop: raw_data[start:stop],
+        single_row_source=lambda idx: raw_data[idx],
+        n_samples=4,
+    )
+    groups = resolve_groups(timestamps, mode="by_count", value=5)
+    t, v, partial = compute_group_reduction(lazy_block, sensor_config, "rms", groups)
+    assert len(t) == 2
+    assert len(v) == 2
+

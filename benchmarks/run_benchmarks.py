@@ -123,14 +123,14 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
         mem_before_ingest = measure_process_memory()
         ingesta_ms, dataset = measure_once(lambda: state.load_dataset(dataset_path))
         mem_after_ingest = measure_process_memory()
-        sensores = [s for s, b in dataset.blocks.items() if b.data.shape[0] > 0]
-        n_total = sum(dataset.blocks[s].data.shape[0] for s in sensores)
+        sensores = [s for s, b in dataset.blocks.items() if b.n_signals > 0]
+        n_total = sum(dataset.blocks[s].n_signals for s in sensores)
 
         por_sensor = {
             str(r.fields.get("sensor")): r for r in get_records("ingesta.sensor") if r.fields.get("sensor")
         }
         for sensor in sensores:
-            n = dataset.blocks[sensor].data.shape[0]
+            n = dataset.blocks[sensor].n_signals
             record = por_sensor.get(sensor)
             ms = record.duration_ms if record is not None else float("nan")
             resultados.append(
@@ -141,7 +141,7 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                     notas={
                         "n_senales": n,
                         "throughput_senales_por_s": round(n / (ms / 1000.0), 1) if ms and ms == ms else None,
-                        "n_muestras_por_senal": int(dataset.blocks[sensor].data.shape[1]),
+                        "n_muestras_por_senal": int(dataset.blocks[sensor].n_samples),
                         "rss_mb": round(mem_after_ingest["rss_bytes"] / (1024 * 1024), 1),
                         "rss_pico_mb": round(mem_after_ingest["peak_rss_bytes"] / (1024 * 1024), 1),
                         "rss_delta_mb": round((mem_after_ingest["rss_bytes"] - mem_before_ingest["rss_bytes"]) / (1024 * 1024), 1),
@@ -278,17 +278,17 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
             )
 
             # --- 5. Cambio de señal en la gráfica tipo #2 ------------------------------
-            indices = np.linspace(0, block.data.shape[0] - 1, 8, dtype=np.int64)
+            indices = np.linspace(0, block.n_signals - 1, 8, dtype=np.int64)
             contador = {"i": 0}
 
             def cambio_senal() -> int:
                 idx = int(indices[contador["i"] % len(indices)])
                 contador["i"] += 1
-                fila = normalize(block.data[[idx]], block.vrange[[idx]])[0]
+                fila = normalize(block.row(idx)[np.newaxis, :], block.vrange[[idx]])[0]
                 fig, _ = build_signal_figure(cfg, fila)
                 return _serializar(fig)
 
-            fila_demo = normalize(block.data[[0]], block.vrange[[0]])[0]
+            fila_demo = normalize(block.row(0)[np.newaxis, :], block.vrange[[0]])[0]
             fig_g2_sample, _ = build_signal_figure(cfg, fila_demo)
             bytes_json_g2, bytes_gzip_g2 = _serializar_bytes(fig_g2_sample)
 
@@ -299,7 +299,7 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
                     mediana_ms=mediana, min_ms=mn, max_ms=mx, repeticiones=repeats,
                     objetivo_ms=OBJETIVO_CAMBIO_SENAL_MS.get(sensor),
                     notas={
-                        "n_muestras": int(block.data.shape[1]),
+                        "n_muestras": int(block.n_samples),
                         "diezmada": sensor == "AE",
                         "bytes_json": bytes_json_g2,
                         "bytes_gzip": bytes_gzip_g2,
@@ -313,7 +313,7 @@ def run(dataset_path: Path, repeats: int) -> tuple[list[BenchmarkResult], dict[s
             # entera -- gráfica #1 + una gráfica #3 puntual (filtro posterior sobre el
             # caché) + una gráfica #3 de grupo (bypass de caché, recálculo real).
             modo, ventana = AGRUPAMIENTO
-            n = block.data.shape[0]
+            n = block.n_signals
             a_excluir = np.arange(n // 4, n // 4 + max(1, n // 20), dtype=np.int64)
 
             def filtro_con_propagacion() -> None:

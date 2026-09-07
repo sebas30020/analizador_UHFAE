@@ -47,6 +47,28 @@ def bin_reduce_minmax(
     return centers[occupied], out_min[occupied], out_max[occupied]
 
 
+ENVELOPE_EXACT_LIMIT: int = 100_000
+ENVELOPE_DECIMATION_BINS: int = 2000
+MAP_3D_MAX_POINTS: int = 15_000
+
+
+def decimate_envelope(
+    t: np.ndarray,
+    y_min: np.ndarray,
+    y_max: np.ndarray,
+    limit: int = ENVELOPE_EXACT_LIMIT,
+    n_bins: int = ENVELOPE_DECIMATION_BINS,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
+    """Diezma la envolvente si el número de señales supera ``limit``, mediante bin_reduce_minmax.
+
+    Retorna (t_out, min_out, max_out, is_decimated).
+    """
+    if t.shape[0] <= limit:
+        return t, y_min, y_max, False
+    t_red, min_red, max_red = bin_reduce_minmax(t, y_min, y_max, n_bins)
+    return t_red, min_red, max_red, True
+
+
 def decimate_signal_by_pixel(
     t: np.ndarray, y: np.ndarray, n_pixels: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

@@ -76,3 +76,61 @@ def test_ingest_experiment_orchestrates_both_sensors(synthetic_hdf5):
     assert result.environmental.timestamps.shape[0] == 4
     assert result.events.timestamps.shape[0] == 2
     assert result.normalization.version == "v1_divide_by_vrange"
+
+
+def test_ingest_sensor_streaming_to_h5_group(synthetic_hdf5, tmp_path):
+    import h5py
+    from data.readers.hdf5_reader import HDF5Reader
+    from data.ingest import ingest_sensor
+    from data.storage import CanonicalStore
+
+    out_file = tmp_path / "streamed_sensor.h5"
+    with HDF5Reader(synthetic_hdf5) as r:
+        with h5py.File(out_file, "w") as f:
+            grp = f.create_group("UHF")
+            ingest_sensor(r, EXPERIMENT_NAME, "UHF", h5_group=grp)
+
+    with CanonicalStore(out_file) as store:
+        assert store.n_signals("UHF") == 4
+        # Timestamps are sorted chronologically
+        ts = store.get_all_timestamps("UHF")
+        assert ts.tolist() == sorted(ts.tolist())
+        assert ts[0] == 1.0
+
+        # Data rows accessed chronologically
+        row0, t0, trig0, vr0 = store.get_signal_row("UHF", 0)
+        assert np.allclose(row0, 3.0)
+        assert t0 == 1.0
+
+        lazy_blk = store.create_lazy_block("UHF")
+        assert lazy_blk.n_signals == 4
+        assert np.allclose(lazy_blk.row(0), 3.0)
+
+
+def test_ingest_experiment_with_canonical_store_path(synthetic_hdf5, tmp_path):
+    from data.readers.hdf5_reader import HDF5Reader
+    from data.ingest import ingest_experiment
+    from core.models import LazyDataProxy
+
+    out_file = tmp_path / "canonical_experiment.h5"
+    with HDF5Reader(synthetic_hdf5) as r:
+        result = ingest_experiment(r, EXPERIMENT_NAME, ["UHF", "AE"], canonical_store_path=out_file)
+
+    assert result.experiment == EXPERIMENT_NAME
+    assert set(result.sensors.keys()) == {"UHF", "AE"}
+
+    uhf = result.sensors["UHF"]
+    assert uhf.n_signals == 4
+    # Underlying data is lazy proxy, not full in-RAM matrix
+    assert isinstance(uhf.data, LazyDataProxy)
+    assert uhf.data.shape == (4, uhf.n_samples)
+
+    # First chronological signal is 3.0
+    assert np.allclose(uhf.row(0), 3.0)
+    assert np.allclose(uhf.rows(0, 2)[0], 3.0)
+
+    ae = result.sensors["AE"]
+    assert ae.n_signals == 2
+    assert isinstance(ae.data, LazyDataProxy)
+    assert ae.data.shape == (2, ae.n_samples)
+

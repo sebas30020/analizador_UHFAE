@@ -120,7 +120,7 @@ def merge_datasets(
             source1_dataset_id = r1.dataset_id
             c1_overrides = {s: r1.sensor_config_overrides(exp1_name, s) for s in sensors}
 
-    n_signals_1 = sum(b.data.shape[0] for b in ingest1.sensors.values())
+    n_signals_1 = sum(b.n_signals for b in ingest1.sensors.values())
     if n_signals_1 == 0:
         raise ValueError("El archivo 1 no contiene señales en la partición seleccionada.")
 
@@ -140,7 +140,7 @@ def merge_datasets(
     events1 = ingest1.events
     exp1_title = ingest1.experiment
     norm_version = ingest1.normalization.version
-    sensor_counts_1 = {s: ingest1.sensors[s].data.shape[0] for s in sensors}
+    sensor_counts_1 = {s: ingest1.sensors[s].n_signals for s in sensors}
 
     dest_path = Path(destination)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,8 +177,8 @@ def merge_datasets(
                 write_sensor_group_attrs(r_grp, cfg)
 
                 block1 = ingest1.sensors[sensor]
-                n1 = block1.data.shape[0]
-                m = block1.data.shape[1] if n1 > 0 else cfg.n_samples
+                n1 = block1.n_signals
+                m = block1.n_samples if n1 > 0 else cfg.n_samples
                 row_chunk = chunk_rows(n1, m)
 
                 data_ds = r_grp.create_dataset(
@@ -193,7 +193,7 @@ def merge_datasets(
                 block_n_signals = cfg.block_n_signals
                 for start in range(0, n1, block_n_signals):
                     stop = min(start + block_n_signals, n1)
-                    data_ds[start:stop, :] = block1.data[start:stop, :]
+                    data_ds[start:stop, :] = block1.rows(start, stop)
 
                 r_grp.create_dataset("timestamps", data=block1.timestamps, maxshape=(None,))
                 r_grp.create_dataset("trigger", data=block1.trigger, maxshape=(None,))
@@ -220,7 +220,7 @@ def merge_datasets(
             ingest2 = ingest_experiment(r2, exp2_name, sensors)
             source2_dataset_id = r2.dataset_id
 
-    n_signals_2 = sum(b.data.shape[0] for b in ingest2.sensors.values())
+    n_signals_2 = sum(b.n_signals for b in ingest2.sensors.values())
     if n_signals_2 == 0:
         raise ValueError("El archivo 2 no contiene señales en la partición seleccionada.")
 
@@ -243,7 +243,7 @@ def merge_datasets(
     else:
         seam_overlap_s = 0.0
 
-    sensor_counts_2 = {s: ingest2.sensors[s].data.shape[0] for s in sensors}
+    sensor_counts_2 = {s: ingest2.sensors[s].n_signals for s in sensors}
     sensor_counts_total = {s: sensor_counts_1[s] + sensor_counts_2[s] for s in sensors}
     n_total_all_sensors = sum(sensor_counts_total.values())
 
@@ -254,7 +254,7 @@ def merge_datasets(
                 r_grp = res_root[sensor]
                 block2 = ingest2.sensors[sensor]
                 n1 = sensor_counts_1[sensor]
-                n2 = block2.data.shape[0]
+                n2 = block2.n_signals
                 n_tot = n1 + n2
 
                 data_ds = r_grp["data"]
@@ -264,7 +264,7 @@ def merge_datasets(
                 block_n_signals = base_configs[sensor].block_n_signals
                 for start in range(0, n2, block_n_signals):
                     stop = min(start + block_n_signals, n2)
-                    data_ds[n1 + start : n1 + stop, :] = block2.data[start:stop, :]
+                    data_ds[n1 + start : n1 + stop, :] = block2.rows(start, stop)
 
                 ts_ds = r_grp["timestamps"]
                 ts_ds.resize((n_tot,))

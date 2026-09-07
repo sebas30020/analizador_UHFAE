@@ -84,7 +84,7 @@ def _write_partition(
     señal en el dataset de origen, para no perder trazabilidad al partir el conjunto.
     """
     n = indices.shape[0]
-    m = block.data.shape[1] if block.data.shape[0] > 0 else config.n_samples
+    m = block.n_samples if block.n_signals > 0 else config.n_samples
     grp = f.create_group(f"{group_name}/{sensor}")
     write_sensor_group_attrs(grp, config)
 
@@ -97,7 +97,7 @@ def _write_partition(
     for start in range(0, n, block_n_signals):
         stop = min(start + block_n_signals, n)
         rows = indices[start:stop]
-        data_ds[start:stop, :] = block.data[rows, :]
+        data_ds[start:stop, :] = block.rows_by_indices(rows)
 
     grp.create_dataset("timestamps", data=block.timestamps[indices])
     grp.create_dataset("trigger", data=block.trigger[indices])
@@ -167,7 +167,7 @@ def export_filtered(
                 config = sensor_configs[sensor]
                 mask = active_masks.get(sensor)
                 if mask is None:
-                    mask = np.ones(block.data.shape[0], dtype=bool)
+                    mask = np.ones(block.n_signals, dtype=bool)
                 keep = np.where(mask)[0]
                 drop = np.where(~mask)[0]
                 n_resultantes += keep.shape[0]

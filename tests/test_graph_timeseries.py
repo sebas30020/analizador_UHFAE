@@ -330,3 +330,30 @@ def test_envelope_trace_uses_float32_transport_encoding():
     assert trace.y.dtype == np.float32
 
 
+def test_envelope_decimates_when_active_signals_exceed_limit():
+    from viz.decimation import ENVELOPE_DECIMATION_BINS, ENVELOPE_EXACT_LIMIT
+    n = ENVELOPE_EXACT_LIMIT + 100
+    ts = np.linspace(1000.0, 5000.0, n)
+    trig = np.full(n, 0.02)
+    vr = np.full(n, 0.5)
+    vm = np.ones(n, dtype=bool)
+    mm = np.column_stack([-np.ones(n), np.ones(n)])
+
+    block = SignalBlock(
+        data=None,
+        timestamps=ts,
+        trigger=trig,
+        vrange=vr,
+        valid_mask=vm,
+        minmax=mm,
+        n_samples=UHF_CONFIG.n_samples,
+    )
+    env, events = _empty_environment()
+    fig = build_timeseries_figure(UHF_CONFIG, block, env, events, float(ts[0]), np.ones(n, dtype=bool))
+    env_trace = fig.data[0]
+    assert len(env_trace.x) <= 3 * ENVELOPE_DECIMATION_BINS
+    assert len(env_trace.x) < 3 * n
+    assert fig.data[-1].name == SELECTION_ANCHOR_NAME
+
+
+

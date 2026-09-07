@@ -150,6 +150,7 @@ def resolve_timeseries_selection_indices(
     active_signal_indices: np.ndarray,
     timestamps_minutes: np.ndarray | None = None,
     minmax: np.ndarray | None = None,
+    is_decimated: bool = False,
 ) -> np.ndarray:
     """Índices globales de señal seleccionados con lazo/caja en la gráfica #1 (Fase 2 / R1).
 
@@ -160,6 +161,8 @@ def resolve_timeseries_selection_indices(
     2. Si contiene `range`, calcula la intersección con el rectángulo en [rx0, rx1] x [ry0, ry1].
     3. Si no hay coordenadas geométricas o faltan arrays temporales/minmax, cae en el
        fallback de compatibilidad por lista de `points` (``pointNumber // ENTRIES_PER_SEGMENT``).
+       Si la envolvente viene diezmada (``is_decimated=True``), el fallback por puntos se
+       desactiva estrictamente para evitar indexaciones erróneas sobre bins de píxel.
 
     Retorna un array 1D de np.ndarray (dtype=int64) con los índices globales de señal.
     """
@@ -210,10 +213,14 @@ def resolve_timeseries_selection_indices(
 
         points = selected_data.get("points")
         if isinstance(points, list):
+            if is_decimated:
+                return np.array([], dtype=np.int64)
             return _resolve_points_fallback(points, active_signal_indices)
         return np.array([], dtype=np.int64)
 
     if isinstance(selected_data, list):
+        if is_decimated:
+            return np.array([], dtype=np.int64)
         return _resolve_points_fallback(selected_data, active_signal_indices)
 
     return np.array([], dtype=np.int64)
