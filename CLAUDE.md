@@ -111,9 +111,16 @@ ruidosamente. `docs/ARQUITECTURA.md` explica el porqué de cada una.
   puntual cuando $N > 5000$ puntos. Régimen de grupo y datasets pequeños usan siempre
   `go.Scatter` (SVG) para asegurar nitidez vectorial y evitar agotar el presupuesto de
   contextos WebGL del navegador (límite de 8-16 contextos).
-- **Cero diezmado en la envolvente de la serie temporal.** La gráfica #1 dibuja un segmento
-  vertical por señal activa sin diezmar (`3 × N` puntos: min, max, NaN), garantizando que
-  todas las señales activas están representadas visualmente.
+- **La envolvente de la serie temporal solo diezma por encima de `ENVELOPE_EXACT_LIMIT`.**
+  Hasta 100 000 señales activas la gráfica #1 dibuja un segmento vertical por señal sin
+  diezmar (`3 × N` puntos: min, max, NaN), garantizando que todas están representadas.
+  Por encima agrega min/max a `ENVELOPE_DECIMATION_BINS = 2000` bins
+  (`ui/components/graph_timeseries.py`). Lo que sí es invariante es la consecuencia: **con
+  la envolvente diezmada, `pointNumber // ENTRIES_PER_SEGMENT` indexa un bin, no una
+  señal**, así que el fallback por puntos del filtrado por lazo deja de ser válido y hay
+  que desactivarlo — es lo que hace `ui/callbacks/sensor_window_callbacks.py` recalculando
+  `is_decimated` antes de llamar a `resolve_timeseries_selection_indices`. La resolución
+  geométrica en servidor (lazo/caja) es exacta en ambos regímenes.
 - **El servidor es de un solo proceso.** `scripts/run_server.py` usa waitress con
   `threads=8` y **un** proceso. El estado vive en singletons de proceso (`AppState`, el
   `LoadedDataset`, `ui/reference_registry.py`, `ui/map_registry.py`), así que servir con

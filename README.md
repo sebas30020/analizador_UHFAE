@@ -62,7 +62,9 @@ De arriba abajo:
    mide), escala vertical y si la vista está diezmada.
 2. **Serie temporal global** (gráfica tipo #1): la envolvente min/max de **todas** las
    señales, con temperatura y humedad en el eje derecho y una línea vertical roja por
-   evento. Aquí no hay diezmado: se dibuja un segmento por señal, sean 12 000 o 20 000.
+   evento. No hay diezmado mientras haya menos de 100 000 señales activas: se dibuja un
+   segmento por señal, sean 12 000 o 20 000. Por encima, la envolvente se agrega a 2000
+   bins min/max — agregación exacta, no submuestreo, así que ningún pico se pierde.
    La envolvente se renderiza con WebGL (`go.Scattergl`), codificada en `float32` para
    reducir en un 50% el volumen de transporte binario.
    Al hacer clic en cualquier punto de la gráfica se navega a la señal más cercana en el

@@ -11,9 +11,11 @@ ve completa o en ventanas amplias, y restaura resolución completa al hacer zoom
 el llamador decide cuándo diezmar según el rango visible y el perfil del sensor, no
 esta función).
 
-La gráfica tipo #1 **ya no diezma nada**: dibuja el min/max de todas las señales activas
-a resolución completa (ver ``ui/components/graph_timeseries.py``). De ahí que aquí solo
-quede :func:`build_vertical_segments`, compartida por ambas gráficas.
+La gráfica tipo #1 diezma **solo por encima de** :data:`ENVELOPE_EXACT_LIMIT`: hasta
+100 000 señales activas dibuja el min/max de todas a resolución completa, y por encima
+agrega a :data:`ENVELOPE_DECIMATION_BINS` bins llamando directamente a
+:func:`bin_reduce_minmax` (ver ``ui/components/graph_timeseries.py``).
+:func:`build_vertical_segments` la comparten ambas gráficas.
 """
 from __future__ import annotations
 

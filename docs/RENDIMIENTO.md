@@ -435,7 +435,7 @@ La solución desacopla la interacción del cliente y la resolución geométrica:
 ## 10. Codificación de transporte liviana: Envolvente en float32 (Fase 3)
 
 ### 10.1 Reducción de buffer binario y tamaño de JSON
-La gráfica #1 representa el 100% de las señales activas sin diezmado mediante un segmento vertical por señal (`3 × N` puntos: mínimo, máximo, `NaN`). Anteriormente, los arrays `xs` e `ys` se construían en precisión doble estándar (`float64`).
+La gráfica #1 representa el 100% de las señales activas sin diezmado — así es por debajo de `ENVELOPE_EXACT_LIMIT` (100 000 señales), el régimen de todos los datasets medidos aquí — mediante un segmento vertical por señal (`3 × N` puntos: mínimo, máximo, `NaN`). Anteriormente, los arrays `xs` e `ys` se construían en precisión doble estándar (`float64`).
 
 En la Fase 3, `viz/decimation.py::build_vertical_segments` se optimizó para emitir arrays con `dtype=np.float32`. Plotly.py serializa nativamente los arrays NumPy `float32` utilizando buffers binarios base64 tipados (`dtype='f4'`), lo que reduce a la mitad el tamaño del buffer transferido al cliente.
 

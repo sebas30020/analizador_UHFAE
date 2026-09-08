@@ -178,8 +178,12 @@ el motor de renderizado según el volumen de datos y el régimen:
 `viz/decimation.py` agrega min/max por bin de píxel, de forma **exacta** (mínimo de los
 mínimos, máximo de los máximos), nunca por submuestreo.
 
-- **Gráfica #1**: no diezma. Dibuja un segmento vertical por cada señal activa, aunque sean
-  decenas de miles — el requisito es ver el conjunto completo sin perder eventos breves.
+- **Gráfica #1**: no diezma hasta `ENVELOPE_EXACT_LIMIT = 100 000` señales activas. Dibuja
+  un segmento vertical por cada señal, aunque sean decenas de miles — el requisito es ver el
+  conjunto completo sin perder eventos breves. Por encima de ese umbral (el
+  `TOO_MANY_POINTS` de Plotly, §9) agrega min/max a `ENVELOPE_DECIMATION_BINS = 2000` bins,
+  y entonces `pointNumber` ya no identifica una señal: el filtrado por lazo queda a cargo
+  únicamente de la resolución geométrica en servidor.
   La traza es `Scattergl` (WebGL) con `mode="lines"` y los datos se emiten como arrays
   `np.float32` con separadores `NaN` (`build_vertical_segments`). Plotly.py serializa estos
   arrays como buffers binarios base64 tipados (`f4`), reduciendo un 50% el buffer de transporte
