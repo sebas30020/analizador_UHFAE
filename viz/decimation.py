@@ -4,10 +4,12 @@
 **mínimo de los mínimos** y el **máximo de los máximos** de todos los puntos que caen
 en él (`np.minimum.at`/`np.maximum.at`, no una selección aleatoria/regular de puntos).
 
-Un solo uso desde la Fase 7: la gráfica tipo #2 (AE), que diezma una **traza cruda
-continua** (10000 muestras) a min/max por bin cuando se ve completa y restaura
-resolución completa al hacer zoom (el llamador decide cuándo diezmar según el rango
-visible, no esta función).
+Un solo uso desde la Fase 7: la gráfica tipo #2 (AE, UHF_KS), que diezma una
+**traza cruda continua** (de 10 000 a 1 M+ de muestras) a min/max por bin cuando se
+ve completa o en ventanas amplias, y restaura resolución completa al hacer zoom
+(cuando las muestras caben en píxeles o la ventana cae bajo ``full_resolution_span``;
+el llamador decide cuándo diezmar según el rango visible y el perfil del sensor, no
+esta función).
 
 La gráfica tipo #1 **ya no diezma nada**: dibuja el min/max de todas las señales activas
 a resolución completa (ver ``ui/components/graph_timeseries.py``). De ahí que aquí solo

@@ -20,10 +20,12 @@ SensorName = Literal["UHF", "AE", "UHF_KS"]
 class SensorConfig:
     """Perfil de configuración de un sensor, leído de ``config/sensors.yaml``.
 
-    ``decimate_full_view``/``has_trigger_metadata`` son propiedades del origen físico,
-    no literales de presentación: qué sensor diezma en vista completa (gráfica #2) y
-    cuál trae nivel de disparo por señal varía según el instrumento, así que viven aquí
-    en vez de estar cableadas por nombre de sensor en ``ui/``.
+    ``decimate_full_view``/``full_resolution_span``/``has_trigger_metadata`` son
+    propiedades del origen físico, no literales de presentación: qué sensor diezma en
+    vista completa (gráfica #2), bajo qué ventana temporal (en su unidad natural
+    ``axis_unit``) se restaura la resolución completa y cuál trae nivel de disparo por
+    señal varía según el instrumento, así que viven aquí en vez de estar cableadas por
+    nombre de sensor en ``ui/``.
     """
 
     name: SensorName
@@ -36,6 +38,7 @@ class SensorConfig:
     target_block_bytes: int
     decimate_full_view: bool = False
     has_trigger_metadata: bool = True
+    full_resolution_span: float | None = None
 
     @property
     def duration_s(self) -> float:
@@ -339,6 +342,9 @@ def load_sensor_configs(path: str | Path) -> dict[SensorName, SensorConfig]:
             target_block_bytes=int(cfg["target_block_bytes"]),
             decimate_full_view=bool(cfg.get("decimate_full_view", False)),
             has_trigger_metadata=bool(cfg.get("has_trigger_metadata", True)),
+            full_resolution_span=(
+                float(cfg["full_resolution_span"]) if cfg.get("full_resolution_span") is not None else None
+            ),
         )
     return configs
 

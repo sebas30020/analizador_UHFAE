@@ -184,9 +184,12 @@ mínimos, máximo de los máximos), nunca por submuestreo.
   `np.float32` con separadores `NaN` (`build_vertical_segments`). Plotly.py serializa estos
   arrays como buffers binarios base64 tipados (`f4`), reduciendo un 50% el buffer de transporte
   y ~44% el JSON total sin alterar la precisión analítica de 64 bits del motor de cálculo.
-- **Gráfica #2 (AE)**: sí diezma la traza cruda de 10 000 muestras cuando se ve completa,
-  y restaura resolución total al hacer zoom. La barra de metadatos siempre dice cuál de
-  las dos vistas está en pantalla.
+- **Gráfica #2 (AE, UHF_KS)**: sí diezma la traza cruda cuando se ve completa (o en ventanas
+  amplias) si `decimate_full_view: true` y las muestras visibles superan el presupuesto de
+  píxeles (`n_pixels = 1600`), y restaura resolución completa al hacer zoom cuando las muestras
+  caben en los píxeles o la ventana temporal solicitada es menor o igual al umbral por sensor
+  `full_resolution_span` definido en `config/sensors.yaml` (ej. 50 ms para AE, 2 µs para UHF_KS).
+  La barra de metadatos siempre dice cuál de las dos vistas está en pantalla.
 
 
 ## 8. Las tres pruebas de fuego (PROMPT §10.3)
@@ -203,7 +206,7 @@ de la interfaz se puebla desde el mismo registro. **Cero cambios** en `engine.py
 
 Los perfiles de sensor viven en `config/sensors.yaml` (`fs_hz`, `n_samples`,
 `freq_limit_hz`, unidad del eje, presupuesto de bloque, `decimate_full_view`,
-`has_trigger_metadata`). Ninguna dimensión temporal está cableada en el código: todo
+`full_resolution_span`, `has_trigger_metadata`). Ninguna dimensión temporal está cableada en el código: todo
 módulo que necesite `fs`/`M` lo lee de `SensorConfig`. La ventana de sensor está
 parametrizada por nombre de sensor y los callbacks se registran una sola vez, así que un
 tercer sensor no duplica lógica de ventana — necesita su entrada en el YAML y su grupo

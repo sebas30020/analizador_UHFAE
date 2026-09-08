@@ -27,6 +27,7 @@ sensors:
     target_block_bytes: 67108864
     decimate_full_view: true       # 10000 muestras: diezma en vista completa, resolución
                                     # total al hacer zoom (gráfica #2)
+    full_resolution_span: 50.0     # ms -- resolución completa desde media traza
     has_trigger_metadata: true
 
   # Osciloscopio Keysight en memoria segmentada (rama lectura_keysight), antena UHF.
@@ -45,6 +46,7 @@ sensors:
     axis_scale: 1.0e6
     target_block_bytes: 67108864
     decimate_full_view: true       # 20000 muestras: mismo criterio que AE
+    full_resolution_span: 2.0      # µs -- ventana < 2 µs => resolución completa
     has_trigger_metadata: false    # el formato Keysight no registra nivel de disparo por señal
 
 # Paralelismo por defecto: os.cpu_count() - 1 (deja un núcleo libre para UI/SO).
