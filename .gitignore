@@ -36,3 +36,8 @@ prompt.txt
 # plan de cada tanda se versiona con nombre propio en `archivos_md/PLAN_*.md`, que es lo
 # que su propio Paso 0 manda hacer; esta copia de la raíz es duplicado.
 plan
+
+# `promt` es el borrador del encargo de la tanda en curso (gemelo de `prompt.txt`,
+# con el nombre mal escrito que deja el harness). Mismo caso que `plan`: se
+# sobrescribe en cada tanda y no aporta nada al repo.
+promt
